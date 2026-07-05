@@ -15,6 +15,7 @@ func TestRootIncludesCanvasCommands(t *testing.T) {
 		{"canvas", "search"},
 		{"canvas", "diff"},
 		{"canvas", "transform"},
+		{"canvas", "label-plan"},
 		{"canvas", "model"},
 		{"canvas", "validate"},
 		{"canvas", "apply"},
@@ -29,6 +30,31 @@ func TestRootIncludesCanvasCommands(t *testing.T) {
 		if cmd == nil || cmd.Name() != args[len(args)-1] {
 			t.Fatalf("Find(%v) = %v, want %q", args, cmd, args[len(args)-1])
 		}
+	}
+}
+
+func TestCanvasApplyAcceptsConnectorLabelPlan(t *testing.T) {
+	root := RootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetIn(strings.NewReader(`{
+		"plan_type": "canvas_connector_labels",
+		"plan_id": "canvas-labels-test",
+		"dry_run": true,
+		"affected_ids": ["edge"],
+		"operations": [{"id": "edge", "source": "a", "target": "b", "before": "Old", "after": "New"}]
+	}`))
+	root.SetArgs([]string{"canvas", "apply", "--dry-run", "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute error: %v\n%s", err, out.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out.String())
+	}
+	if got["plan_type"] != "canvas_connector_labels" || got["live_write_supported"] != true {
+		t.Fatalf("apply output = %#v, want connector label dry-run with gated live support", got)
 	}
 }
 

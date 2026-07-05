@@ -69,10 +69,12 @@ func TestSearchBlocksFindsSurfaceConnectorEndpoint(t *testing.T) {
 				"type": "$blocksuite:internal:native$",
 				"value": map[string]any{
 					"edge": map[string]any{
-						"id":     "edge",
-						"type":   "connector",
-						"source": map[string]any{"id": "a"},
-						"target": map[string]any{"id": "b"},
+						"id":         "edge",
+						"type":       "connector",
+						"text":       "Approved Send",
+						"labelStyle": map[string]any{"fontSize": float64(16), "textAlign": "center"},
+						"source":     map[string]any{"id": "a"},
+						"target":     map[string]any{"id": "b"},
 					},
 				},
 			},
@@ -97,6 +99,12 @@ func TestSearchBlocksFindsSurfaceConnectorEndpoint(t *testing.T) {
 	got := result.Entities[0]
 	if got.ID != "edge" || got.ParentID != "surface" || got.ConnectorSource != "a" || got.ConnectorTarget != "b" {
 		t.Fatalf("entity = %#v, want surface connector", got)
+	}
+	if got.ConnectorLabel != "Approved Send" || got.Text != "Approved Send" {
+		t.Fatalf("connector label = %q text = %q, want Approved Send", got.ConnectorLabel, got.Text)
+	}
+	if got.LabelStyle["textAlign"] != "center" {
+		t.Fatalf("label style = %#v, want textAlign center", got.LabelStyle)
 	}
 }
 

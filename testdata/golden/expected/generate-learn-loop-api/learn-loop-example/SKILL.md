@@ -5,11 +5,6 @@ author: "printing-press-golden"
 license: "Apache-2.0"
 argument-hint: "<command> [args] | install cli|mcp"
 allowed-tools: "Read Bash"
-metadata:
-  openclaw:
-    requires:
-      bins:
-        - learn-loop-example-pp-cli
 ---
 
 # Learn Loop Example — Printing Press CLI

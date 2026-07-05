@@ -48,6 +48,11 @@
       "description": "Builds dry-run operation plans for selected AFFiNE canvas entities."
     },
     {
+      "name": "Canvas connector label planner",
+      "command": "canvas label-plan",
+      "description": "Builds dry-run AFFiNE canvas connector label update plans from selected connectors."
+    },
+    {
       "name": "Canvas model normalizer",
       "command": "canvas model",
       "description": "Normalizes AFFiNE canvas JSON into explicit nodes and connectors."

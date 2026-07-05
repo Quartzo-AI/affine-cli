@@ -45,15 +45,26 @@ type canvasPoint struct {
 	Y float64 `json:"y"`
 }
 
+type canvasTextBlock struct {
+	ID   string `json:"id,omitempty"`
+	Text string `json:"text"`
+	Type string `json:"type,omitempty"`
+}
+
 type canvasNode struct {
-	ID    string  `json:"id"`
-	Text  string  `json:"text"`
-	Role  string  `json:"role,omitempty"`
-	Level int     `json:"level"`
-	X     float64 `json:"x"`
-	Y     float64 `json:"y"`
-	W     float64 `json:"w"`
-	H     float64 `json:"h"`
+	ID              string            `json:"id"`
+	Text            string            `json:"text"`
+	TextBlocks      []canvasTextBlock `json:"text_blocks,omitempty"`
+	ReplaceChildren bool              `json:"replace_children,omitempty"`
+	DisplayMode     string            `json:"display_mode,omitempty"`
+	Background      any               `json:"background,omitempty"`
+	Edgeless        map[string]any    `json:"edgeless,omitempty"`
+	Role            string            `json:"role,omitempty"`
+	Level           int               `json:"level"`
+	X               float64           `json:"x"`
+	Y               float64           `json:"y"`
+	W               float64           `json:"w"`
+	H               float64           `json:"h"`
 }
 
 type canvasConnection struct {
@@ -119,12 +130,46 @@ func newCanvasCmd(flags *rootFlags) *cobra.Command {
 	cmd.AddCommand(newCanvasSearchCmd(flags))
 	cmd.AddCommand(newCanvasDiffCmd(flags))
 	cmd.AddCommand(newCanvasTransformCmd(flags))
+	cmd.AddCommand(newCanvasLabelPlanCmd(flags))
 	cmd.AddCommand(newCanvasModelCmd(flags))
 	cmd.AddCommand(newCanvasValidateCmd(flags))
 	cmd.AddCommand(newCanvasExampleCmd())
 	cmd.AddCommand(newCanvasCardCmd(flags))
 	cmd.AddCommand(newCanvasDocCmd(flags))
 	cmd.AddCommand(newCanvasBlockCmd(flags))
+	return cmd
+}
+
+func newCanvasLabelPlanCmd(flags *rootFlags) *cobra.Command {
+	var opts canvaswrite.ConnectorLabelOptions
+	var selectorsPath string
+	cmd := &cobra.Command{
+		Use:   "label-plan",
+		Short: "Build a reviewable AFFiNE canvas connector label plan",
+		Example: "  affine-pp-cli canvas label-plan --selectors connectors.json --label edge-id=\"Reviewed Label\" --json\n" +
+			"  affine-pp-cli canvas label-plan --selectors connectors.json --id edge-id --text \"Reviewed Label\" --json",
+		Annotations: map[string]string{
+			"mcp:read-only": "true",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			selectors, err := readCanvasSelectors(selectorsPath, cmd.InOrStdin(), len(opts.IDs) > 0)
+			if err != nil {
+				return err
+			}
+			plan, err := canvaswrite.BuildConnectorLabelPlan(selectors, opts)
+			if err != nil {
+				return err
+			}
+			return writeJSON(cmd.OutOrStdout(), plan)
+		},
+	}
+	cmd.Flags().StringVar(&selectorsPath, "selectors", "", "canvas search JSON file; use - for stdin")
+	cmd.Flags().StringVar(&opts.DocID, "doc", "", "AFFiNE document ID for the connector label plan")
+	cmd.Flags().StringSliceVar(&opts.IDs, "id", nil, "Selected connector ID; may be repeated or comma-separated")
+	cmd.Flags().StringArrayVar(&opts.Labels, "label", nil, "Connector label as connector-id=text; may be repeated")
+	cmd.Flags().StringVar(&opts.Text, "text", "", "Label text to apply to every selected --id")
+	cmd.Flags().BoolVar(&opts.AllowEmpty, "allow-empty", false, "Allow empty label text to remove a connector label")
+	cmd.Flags().StringVar(&opts.BackupTarget, "backup-target", "", "Expected backup target for later live apply proof")
 	return cmd
 }
 
@@ -510,6 +555,34 @@ func newCanvasApplyCmd(flags *rootFlags) *cobra.Command {
 				return err
 			}
 			switch plan := payload.(type) {
+			case canvaswrite.ConnectorLabelPlan:
+				if liveApply && !flags.dryRun {
+					if !flags.yes {
+						return fmt.Errorf("confirmation required: pass --yes for live canvas apply")
+					}
+					if err := canvaswrite.ValidateConnectorLabelApply(plan, canvaswrite.ConnectorLabelApplyOptions{WorkspaceID: workspaceID, DocID: docID, BackupDir: backupDir}); err != nil {
+						return err
+					}
+					cfg, err := config.Load(flags.configPath)
+					if err != nil {
+						return err
+					}
+					result, err := canvaswrite.ApplyConnectorLabelPlan(cfg, plan, canvaswrite.ConnectorLabelApplyOptions{WorkspaceID: workspaceID, DocID: docID, BackupDir: backupDir})
+					if err != nil {
+						return err
+					}
+					return writeJSON(cmd.OutOrStdout(), result)
+				}
+				return writeJSON(cmd.OutOrStdout(), map[string]any{
+					"dry_run":               true,
+					"plan_type":             plan.PlanType,
+					"plan_id":               plan.PlanID,
+					"affected_ids":          plan.AffectedIDs,
+					"operations":            plan.Operations,
+					"semantic_diff_preview": canvaswrite.ConnectorLabelDiffPreview(plan.Operations),
+					"live_write_supported":  true,
+					"live_write_requires":   []string{"--live", "--workspace", "--doc", "--backup-dir", "--yes"},
+				})
 			case canvaswrite.TransformPlan:
 				if liveApply && !flags.dryRun {
 					if !flags.yes {
@@ -799,19 +872,44 @@ func canvasLayoutApplyScript(doc int, plan canvasPlan) string {
 					note.set("sys:flavour", "affine:note");
 					note.set("sys:version", 1);
 					note.set("sys:children", new Y.Array());
-					note.set("prop:displayMode", "edgeless");
+					note.set("prop:displayMode", n.display_mode || "edgeless");
 					note.set("prop:hidden", false);
 					note.set("prop:index", "a0");
 					blocks.set(n.id, note);
 					createdNote = true;
 				}
 				note.set("prop:xywh", xywh(n));
+				if (n.display_mode) note.set("prop:displayMode", n.display_mode);
+				if (n.background) note.set("prop:background", n.background);
+				if (n.edgeless) note.set("prop:edgeless", n.edgeless);
 				var children = note.get("sys:children");
 				if (!(children instanceof Y.Array)) {
 					children = new Y.Array();
 					note.set("sys:children", children);
 				}
-				if (createdNote || n.text) {
+				var textBlocks = Array.isArray(n.text_blocks) ? n.text_blocks : [];
+				if (textBlocks.length > 0) {
+					if (n.replace_children) {
+						while (children.length > 0) children.delete(0, children.length);
+					}
+					for (var tb = 0; tb < textBlocks.length; tb++) {
+						var spec = textBlocks[tb] || {};
+						var richTextId = spec.id || (n.id + "-text-" + tb);
+						var richTextBlock = blocks.get(richTextId);
+						if (!(richTextBlock instanceof Y.Map)) {
+							richTextBlock = new Y.Map();
+							richTextBlock.set("sys:id", richTextId);
+							richTextBlock.set("sys:flavour", "affine:paragraph");
+							richTextBlock.set("sys:version", 1);
+							richTextBlock.set("sys:type", spec.type || "text");
+							richTextBlock.set("prop:type", spec.type || "text");
+							richTextBlock.set("sys:children", new Y.Array());
+							blocks.set(richTextId, richTextBlock);
+						}
+						richTextBlock.set("prop:text", ytext(spec.text || ""));
+						if (!hasChild(children, richTextId)) children.insert(children.length, [richTextId]);
+					}
+				} else if (createdNote || n.text) {
 					var textId = n.id + "-text";
 					var textBlock = blocks.get(textId);
 					if (!(textBlock instanceof Y.Map)) {
@@ -1129,6 +1227,13 @@ func readCanvasApplyPayload(path string, stdin io.Reader) (any, error) {
 		var plan canvaswrite.TransformPlan
 		if err := json.Unmarshal(data, &plan); err != nil {
 			return nil, fmt.Errorf("parsing canvas transform plan JSON: %w", err)
+		}
+		return plan, nil
+	}
+	if envelope.PlanType == "canvas_connector_labels" {
+		var plan canvaswrite.ConnectorLabelPlan
+		if err := json.Unmarshal(data, &plan); err != nil {
+			return nil, fmt.Errorf("parsing canvas connector label plan JSON: %w", err)
 		}
 		return plan, nil
 	}

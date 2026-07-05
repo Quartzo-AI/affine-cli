@@ -72,15 +72,6 @@ Inside a Hermes chat session:
 
 Restart the Hermes session or gateway if the newly installed skill is not visible immediately.
 
-## Install for OpenClaw
-Install both the CLI binary and the focused OpenClaw skill. The installer defaults binaries to a per-user bin directory (`$HOME/.local/bin` on macOS/Linux, `%LOCALAPPDATA%\Programs\PrintingPress\bin` on Windows):
-
-```bash
-npx -y @mvanhorn/printing-press-library install affine --agent openclaw
-```
-
-Restart the OpenClaw session or gateway if the newly installed skill is not visible immediately.
-
 ## Use with Claude Desktop
 
 This CLI ships an [MCPB](https://github.com/modelcontextprotocol/mcpb) bundle — Claude Desktop's standard format for one-click MCP extension installs (no JSON config required).
@@ -187,6 +178,14 @@ These capabilities aren't available in any other tool for this API.
 
   ```bash
   affine-pp-cli canvas transform --selectors search.json --move 10,0 --json
+  ```
+- **`canvas label-plan`** - Builds dry-run AFFiNE canvas connector label update plans from selected connectors.
+
+  _Use this to name arrows only after connector selectors and label text have been reviewed._
+
+  ```bash
+  affine-pp-cli canvas label-plan --selectors connectors.json --label edge-id="Reviewed Label" --json
+  affine-pp-cli canvas apply --plan connector-labels.json --live --workspace <workspace-id> --doc <doc-id> --backup-dir ./backups --yes --json
   ```
 - **`canvas model`** — Normalizes AFFiNE canvas JSON into explicit nodes and connectors.
 

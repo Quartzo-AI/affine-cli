@@ -2,9 +2,9 @@
 
 ## Current Status
 
-- Active milestone: none
-- Current phase: v1.1 Canvas Power Tools shipped; ready for next milestone planning
-- Last planning update: 2026-06-19
+- Active milestone: v1.2 Connector Label Writing
+- Current phase: v1.2 connector label writing applied and verified
+- Last planning update: 2026-06-20
 - Git baseline: main at 4f9a09c3
 
 ## Decisions
@@ -13,6 +13,7 @@
 - Execute milestone phases serially because search/model semantics are dependencies for diff, transform, and live apply.
 - Use at most two active subagents per wave.
 - Keep all Canvas mutations dry-run by default. Live apply requires explicit apply gates and verification.
+- Connector label writing must be review-first: no label is inserted into an AFFiNE document until the operator approves the planned insertions.
 
 ## Completed
 
@@ -25,10 +26,20 @@
 - Verification passed: `go test ./internal/canvaswrite ./internal/cli`, `go test ./...`, `go run ./cmd/affine-pp-cli canvas transform --help`, `go run ./cmd/affine-pp-cli which "canvas transform" --json`, and selector-to-apply dry-run smoke.
 - Phase 4 implemented gated live apply for transform and layout Canvas plans with required `--live` or `--apply`, `--workspace`, `--doc`, `--backup-dir`, and `--yes`; semantic diff preview, backups, pre/post integrity, tests, live fixture smoke, and workflow proof passed.
 - Milestone v1.1 completed with accepted tech debt documented in `.planning/v1.1-MILESTONE-AUDIT.md`.
+- Milestone v1.2 planning artifacts created for Connector Label Writing.
+- Phase 5 implemented connector label extraction in canvas search/model surfaces and `connector_label_changed` semantic diff reporting.
+- Phase 6 implemented `canvas label-plan` for reviewable connector label plans and `canvas apply --dry-run` compatibility for `canvas_connector_labels`.
+- Phase 7 implemented gated connector label live apply path with backup, integrity, source/target preservation, and post-reload label verification. Live insertion into the AFFiNE board is pending operator approval of the planned labels.
+- Phase 8 surfaced the command in help, `which`, README, SKILL, `.printing-press.json`, and `.printing-press-patches/`.
+- Verification passed: `go test ./internal/canvaswrite ./internal/cli`, `go test ./...`, `go run ./cmd/affine-pp-cli canvas label-plan --help`, `go run ./cmd/affine-pp-cli which "connector label" --json`, and `canvas apply --dry-run --json` with a `canvas_connector_labels` stdin plan.
+- Review plan created from live board connectors: `.planning/milestones/v1.2-connector-label-writing/1co-connector-label-plan.review.json`.
+- Human-readable review table created: `.planning/milestones/v1.2-connector-label-writing/1co-connector-label-review.md`.
+- Operator approved live apply on 2026-06-20. `canvas-labels-0674943e` applied 23 connector labels to AFFiNE doc `B6pvUw-r5SSfWKam-wncU`.
+- Post-apply verification passed: live apply returned `applied: true`, post-integrity returned `ok: true` with `issue_count: 0`, and live search matched all 23 planned labels with 0 mismatches.
 
 ## Next Action
 
-Run `$gsd-new-milestone` to define the next AFFiNE CLI milestone.
+Commit or otherwise preserve the v1.2 implementation, planning artifacts, and Showrunner affine-cli skill update.
 
 ## Deferred Items
 

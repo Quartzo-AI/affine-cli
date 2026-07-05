@@ -1,0 +1,223 @@
+{
+  "plan_type": "canvas_connector_labels",
+  "plan_id": "canvas-labels-0674943e",
+  "dry_run": true,
+  "doc_id": "B6pvUw-r5SSfWKam-wncU",
+  "source": {
+    "mode": "live",
+    "count": 23
+  },
+  "affected_ids": [
+    "TS1c3K3Jpm",
+    "c0007ygitw",
+    "c000e36ji4",
+    "c000iaeier",
+    "c000iatjd1",
+    "c000j87sqc",
+    "c000jaa9tv",
+    "c000ql2gto",
+    "c000rqsr4i",
+    "c000th5p53",
+    "c000v49t2f",
+    "c000x6y1cs",
+    "c001113z7k",
+    "c00133zw6e",
+    "c0014ktb6b",
+    "c0015koefu",
+    "c001fimc59",
+    "c001gl59c8",
+    "c001j7xblq",
+    "c001ku47qk",
+    "c001rzi6tf",
+    "c001tkcscq",
+    "c001wcrpah"
+  ],
+  "operations": [
+    {
+      "id": "c000iaeier",
+      "source": "iegD6ebrRq",
+      "target": "1co-card-01-sources",
+      "before": "",
+      "after": "Mapa 1CO Para Fontes De Leads"
+    },
+    {
+      "id": "c0015koefu",
+      "source": "1co-card-01-sources",
+      "target": "1co-card-02-dedup",
+      "before": "",
+      "after": "Lotes Brutos Com Origem Preservada"
+    },
+    {
+      "id": "c0007ygitw",
+      "source": "1co-card-02-dedup",
+      "target": "1co-card-03-pool",
+      "before": "",
+      "after": "Lead Consolidado E Deduplicado"
+    },
+    {
+      "id": "c000ql2gto",
+      "source": "1co-card-03-pool",
+      "target": "1co-card-04-allocation",
+      "before": "",
+      "after": "Disponibilidade Global Para Alocação"
+    },
+    {
+      "id": "c000jaa9tv",
+      "source": "1co-card-04-allocation",
+      "target": "1co-card-05-tables",
+      "before": "",
+      "after": "Alocação Por ICP E Campanha"
+    },
+    {
+      "id": "c001tkcscq",
+      "source": "1co-card-05-tables",
+      "target": "1co-card-06-router",
+      "before": "",
+      "after": "Contexto Operacional Do Cliente"
+    },
+    {
+      "id": "c001fimc59",
+      "source": "1co-card-06-router",
+      "target": "1co-card-07-n8n",
+      "before": "",
+      "after": "Configuração Resolvida Sem Chave Exposta"
+    },
+    {
+      "id": "c000x6y1cs",
+      "source": "1co-card-07-n8n",
+      "target": "1co-card-08-sales",
+      "before": "",
+      "after": "Enriquecimento E Personalização"
+    },
+    {
+      "id": "c00133zw6e",
+      "source": "1co-card-08-sales",
+      "target": "1co-card-09-channels",
+      "before": "",
+      "after": "Personalização Comercial Do Toque"
+    },
+    {
+      "id": "c001rzi6tf",
+      "source": "1co-card-09-channels",
+      "target": "1co-card-10-reply",
+      "before": "",
+      "after": "Respostas E Sinais De Canal"
+    },
+    {
+      "id": "c000rqsr4i",
+      "source": "1co-card-10-reply",
+      "target": "1co-card-11-inbox",
+      "before": "",
+      "after": "Intenção Classificada E Draft"
+    },
+    {
+      "id": "c000j87sqc",
+      "source": "1co-card-11-inbox",
+      "target": "1co-card-12-crm",
+      "before": "",
+      "after": "Conversa Qualificada Para Pipeline"
+    },
+    {
+      "id": "c000iatjd1",
+      "source": "1co-card-05-tables",
+      "target": "1co-card-13-pool-sync",
+      "before": "",
+      "after": "Evento Local Com Quartzo-ID"
+    },
+    {
+      "id": "c001gl59c8",
+      "source": "1co-card-13-pool-sync",
+      "target": "1co-card-03-pool",
+      "before": "",
+      "after": "Status Global Sincronizado"
+    },
+    {
+      "id": "TS1c3K3Jpm",
+      "source": "1co-card-05-tables",
+      "target": "1co-card-14-reconciliation",
+      "before": "",
+      "after": "Base Local Para Reconciliação"
+    },
+    {
+      "id": "c001j7xblq",
+      "source": "1co-card-14-reconciliation",
+      "target": "1co-card-03-pool",
+      "before": "",
+      "after": "Correção De Drift E Cooldown"
+    },
+    {
+      "id": "c001ku47qk",
+      "source": "1co-card-15-crossref",
+      "target": "1co-card-05-tables",
+      "before": "",
+      "after": "Staging De Leads Do Inbox"
+    },
+    {
+      "id": "c0014ktb6b",
+      "source": "1co-card-15-crossref",
+      "target": "1co-card-12-crm",
+      "before": "",
+      "after": "Contexto Cruzado De Oportunidade"
+    },
+    {
+      "id": "c000th5p53",
+      "source": "1co-card-16-gates",
+      "target": "1co-card-07-n8n",
+      "before": "",
+      "after": "Aprovação Para Workflow Vivo"
+    },
+    {
+      "id": "c000v49t2f",
+      "source": "1co-card-16-gates",
+      "target": "1co-card-09-channels",
+      "before": "",
+      "after": "Aprovação Para Envio Real"
+    },
+    {
+      "id": "c001wcrpah",
+      "source": "1co-card-16-gates",
+      "target": "1co-card-12-crm",
+      "before": "",
+      "after": "Aprovação Para Registro Formal"
+    },
+    {
+      "id": "c000e36ji4",
+      "source": "1co-card-17-ops",
+      "target": "1co-card-06-router",
+      "before": "",
+      "after": "Roteamento Operacional Por Cliente"
+    },
+    {
+      "id": "c001113z7k",
+      "source": "1co-card-17-ops",
+      "target": "1co-card-07-n8n",
+      "before": "",
+      "after": "Operação E Diagnóstico De Workflows"
+    }
+  ],
+  "integrity": {
+    "doc_id": "B6pvUw-r5SSfWKam-wncU",
+    "ok": true,
+    "block_count": 0,
+    "issue_count": 0,
+    "summary": {}
+  },
+  "backup_target": "00-brain/outputs/affine/backups",
+  "rollback": {
+    "required": true,
+    "fields": [
+      "before_snapshot",
+      "delta",
+      "affected_ids",
+      "previous_labels"
+    ]
+  },
+  "proof": {
+    "required": true,
+    "fields": [
+      "pre_integrity",
+      "post_integrity",
+      "reload_label_verification"
+    ]
+  }
+}

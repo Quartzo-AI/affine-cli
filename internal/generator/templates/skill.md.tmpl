@@ -7,17 +7,7 @@ argument-hint: "<command> [args] | install cli|mcp"
 allowed-tools: "Read Bash"
 {{if .Regions}}regions: [{{range $i, $region := .Regions}}{{if $i}}, {{end}}"{{yamlDoubleQuoted $region}}"{{end}}]
 {{end}}{{if .APILanguage}}api_language: "{{yamlDoubleQuoted .APILanguage}}"
-{{end}}metadata:
-  openclaw:
-    requires:
-      bins:
-        - {{.Name}}-pp-cli
-{{- if .Category}}
-    install:
-      - kind: go
-        bins: [{{.Name}}-pp-cli]
-        module: github.com/mvanhorn/printing-press-library/library/{{.Category}}/{{.Name}}/cmd/{{.Name}}-pp-cli
-{{- end}}
+{{end}}
 ---
 
 # {{.ProseName}} — Printing Press CLI

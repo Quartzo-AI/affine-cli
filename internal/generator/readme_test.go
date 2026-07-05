@@ -275,13 +275,13 @@ func TestReadmeUsesExplicitDisplayNameForProse(t *testing.T) {
 	assert.NotContains(t, content, "# Producthunt CLI")
 }
 
-// TestReadmeEmitsHermesAndOpenClawInstallSections asserts the new install
-// sections render with the correct hardcoded mvanhorn paths and the
+// TestReadmeEmitsHermesInstallSection asserts the focused Hermes install
+// section renders with the correct hardcoded mvanhorn paths and the
 // hermes-install anchor for sweep-tool idempotency. CLI form and chat form
 // both use mvanhorn/printing-press-library/cli-skills/pp-<api> (verified
 // against tested install behavior — earlier draft of the chat form used a
 // shorter mvanhorn/cli-skills path that doesn't resolve).
-func TestReadmeEmitsHermesAndOpenClawInstallSections(t *testing.T) {
+func TestReadmeEmitsHermesInstallSection(t *testing.T) {
 	t.Parallel()
 
 	apiSpec := minimalSpec("hermes-install")
@@ -300,14 +300,9 @@ func TestReadmeEmitsHermesAndOpenClawInstallSections(t *testing.T) {
 
 	hermesStart := strings.Index(content, "## Install for Hermes")
 	require.NotEqual(t, -1, hermesStart, "README must include the Hermes install section")
-	hermesEnd := strings.Index(content[hermesStart:], "## Install for OpenClaw")
-	require.NotEqual(t, -1, hermesEnd, "Hermes section must be followed by the OpenClaw install section")
+	hermesEnd := strings.Index(content[hermesStart:], "## Use with Claude Desktop")
+	require.NotEqual(t, -1, hermesEnd, "Hermes section must be followed by the Claude Desktop section")
 	hermesSection := content[hermesStart : hermesStart+hermesEnd]
-
-	openClawStart := hermesStart + hermesEnd
-	openClawEnd := strings.Index(content[openClawStart:], "## Use with Claude Desktop")
-	require.NotEqual(t, -1, openClawEnd, "OpenClaw section must be followed by the Claude Desktop section")
-	openClawSection := content[openClawStart : openClawStart+openClawEnd]
 
 	// Hermes section: install the binary as well as the focused skill; both
 	// skill-install forms use the full mvanhorn/printing-press-library/cli-skills path.
@@ -319,12 +314,6 @@ func TestReadmeEmitsHermesAndOpenClawInstallSections(t *testing.T) {
 		"Hermes CLI form must use mvanhorn/printing-press-library/cli-skills (the short mvanhorn/cli-skills form was wrong)")
 	assert.Contains(t, hermesSection, "/skills install mvanhorn/printing-press-library/cli-skills/pp-hermes-install --force",
 		"Hermes chat form must use mvanhorn/printing-press-library/cli-skills")
-
-	// OpenClaw section: copyable code-fenced agent instruction.
-	assert.Contains(t, openClawSection, "npx -y @mvanhorn/printing-press-library install hermes-install --agent openclaw",
-		"OpenClaw form must install both the focused skill and binary using the installer default bin directory")
-	assert.NotContains(t, openClawSection, "--agent openclaw --bin-dir",
-		"OpenClaw form should rely on the installer default bin directory unless explicitly overridden")
 }
 
 // TestReadmeFallsBackWhenNarrativeAbsent asserts the generic description

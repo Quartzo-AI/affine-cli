@@ -1,6 +1,6 @@
 {
   "project": "affine-cli",
-  "active_milestone": "v1.1 Canvas Power Tools",
+  "active_milestone": "v1.2 Connector Label Writing",
   "workflow": "gsd",
   "phase_execution": "serial",
   "max_active_subagents": 2,

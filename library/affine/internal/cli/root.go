@@ -149,6 +149,7 @@ Highlights (not in the official API docs):
   • canvas search   Finds AFFiNE canvas blocks, cards, and connectors by stable selector fields.
   • canvas diff   Compares two AFFiNE canvas states and reports semantic entity changes.
   • canvas transform   Builds dry-run operation plans for selected AFFiNE canvas entities.
+  • canvas label-plan   Builds dry-run AFFiNE canvas connector label update plans from selected connectors.
   • canvas model   Normalizes AFFiNE canvas JSON into explicit nodes and connectors.
   • canvas validate   Checks planned canvas nodes and connectors for invalid geometry and orphaned links.
   • canvas apply   Dry-runs canvas plans and applies transform or layout plans only behind explicit live gates.

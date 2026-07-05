@@ -1,0 +1,30 @@
+{
+  "doc_id": "B6pvUw-r5SSfWKam-wncU",
+  "source_mode": "live",
+  "count": 23,
+  "entities": [
+    {"id": "c000iaeier", "kind": "connector", "connector_source": "iegD6ebrRq", "connector_target": "1co-card-01-sources"},
+    {"id": "c0015koefu", "kind": "connector", "connector_source": "1co-card-01-sources", "connector_target": "1co-card-02-dedup"},
+    {"id": "c0007ygitw", "kind": "connector", "connector_source": "1co-card-02-dedup", "connector_target": "1co-card-03-pool"},
+    {"id": "c000ql2gto", "kind": "connector", "connector_source": "1co-card-03-pool", "connector_target": "1co-card-04-allocation"},
+    {"id": "c000jaa9tv", "kind": "connector", "connector_source": "1co-card-04-allocation", "connector_target": "1co-card-05-tables"},
+    {"id": "c001tkcscq", "kind": "connector", "connector_source": "1co-card-05-tables", "connector_target": "1co-card-06-router"},
+    {"id": "c001fimc59", "kind": "connector", "connector_source": "1co-card-06-router", "connector_target": "1co-card-07-n8n"},
+    {"id": "c000x6y1cs", "kind": "connector", "connector_source": "1co-card-07-n8n", "connector_target": "1co-card-08-sales"},
+    {"id": "c00133zw6e", "kind": "connector", "connector_source": "1co-card-08-sales", "connector_target": "1co-card-09-channels"},
+    {"id": "c001rzi6tf", "kind": "connector", "connector_source": "1co-card-09-channels", "connector_target": "1co-card-10-reply"},
+    {"id": "c000rqsr4i", "kind": "connector", "connector_source": "1co-card-10-reply", "connector_target": "1co-card-11-inbox"},
+    {"id": "c000j87sqc", "kind": "connector", "connector_source": "1co-card-11-inbox", "connector_target": "1co-card-12-crm"},
+    {"id": "c000iatjd1", "kind": "connector", "connector_source": "1co-card-05-tables", "connector_target": "1co-card-13-pool-sync"},
+    {"id": "c001gl59c8", "kind": "connector", "connector_source": "1co-card-13-pool-sync", "connector_target": "1co-card-03-pool"},
+    {"id": "TS1c3K3Jpm", "kind": "connector", "connector_source": "1co-card-05-tables", "connector_target": "1co-card-14-reconciliation"},
+    {"id": "c001j7xblq", "kind": "connector", "connector_source": "1co-card-14-reconciliation", "connector_target": "1co-card-03-pool"},
+    {"id": "c001ku47qk", "kind": "connector", "connector_source": "1co-card-15-crossref", "connector_target": "1co-card-05-tables"},
+    {"id": "c0014ktb6b", "kind": "connector", "connector_source": "1co-card-15-crossref", "connector_target": "1co-card-12-crm"},
+    {"id": "c000th5p53", "kind": "connector", "connector_source": "1co-card-16-gates", "connector_target": "1co-card-07-n8n"},
+    {"id": "c000v49t2f", "kind": "connector", "connector_source": "1co-card-16-gates", "connector_target": "1co-card-09-channels"},
+    {"id": "c001wcrpah", "kind": "connector", "connector_source": "1co-card-16-gates", "connector_target": "1co-card-12-crm"},
+    {"id": "c000e36ji4", "kind": "connector", "connector_source": "1co-card-17-ops", "connector_target": "1co-card-06-router"},
+    {"id": "c001113z7k", "kind": "connector", "connector_source": "1co-card-17-ops", "connector_target": "1co-card-07-n8n"}
+  ]
+}

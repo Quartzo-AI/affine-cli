@@ -27,3 +27,26 @@ See `.planning/v1.1-MILESTONE-AUDIT.md`.
 - Durable workflow proof should add search, diff, and doc-integrity smoke steps.
 - Live apply should eventually assert post-reload field equality for every operation.
 - Phase summaries and Nyquist validation artifacts were not generated for v1.1.
+
+## v1.2 Connector Label Writing
+
+**Status:** planned
+**Plan index:** `.planning/milestones/v1.2-connector-label-writing/PLAN-INDEX.md`
+**Roadmap:** `.planning/milestones/v1.2-ROADMAP.md`
+**Requirements:** `.planning/milestones/v1.2-REQUIREMENTS.md`
+
+### Goal
+
+AFFiNE CLI should safely write text labels onto existing Canvas connector arrows without moving cards, relinking endpoints, or rebuilding the surrounding diagram.
+
+### Required Capability
+
+- Read connector labels from `affine:surface` connector elements.
+- Search and diff connectors by label text, source, target, and surface element ID.
+- Produce reviewable connector-label plans before any live mutation.
+- Apply labels live only behind the existing AFFiNE Canvas gates: workspace, doc, backup directory, explicit confirmation, pre/post integrity, reload verification, and proof artifacts.
+- Preserve connector geometry, endpoints, stroke, arrowheads, seed, style, and current card positions.
+
+### Product Rule
+
+Connector label insertion must support a review-first workflow. Operators prepare label text, inspect the planned before/after values, and only then run a separate live apply.

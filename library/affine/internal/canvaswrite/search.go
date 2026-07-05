@@ -38,20 +38,22 @@ type SearchResult struct {
 }
 
 type SearchEntity struct {
-	ID              string    `json:"id"`
-	Kind            string    `json:"kind"`
-	Flavour         string    `json:"flavour,omitempty"`
-	Type            string    `json:"type,omitempty"`
-	Text            string    `json:"text,omitempty"`
-	ParentID        string    `json:"parent_id,omitempty"`
-	ChildIDs        []string  `json:"child_ids,omitempty"`
-	DisplayMode     string    `json:"display_mode,omitempty"`
-	Hidden          bool      `json:"hidden,omitempty"`
-	XYWH            []float64 `json:"xywh,omitempty"`
-	SourceID        string    `json:"source_id,omitempty"`
-	ConnectorSource string    `json:"connector_source,omitempty"`
-	ConnectorTarget string    `json:"connector_target,omitempty"`
-	IntegrityIssues []string  `json:"integrity_issues,omitempty"`
+	ID              string         `json:"id"`
+	Kind            string         `json:"kind"`
+	Flavour         string         `json:"flavour,omitempty"`
+	Type            string         `json:"type,omitempty"`
+	Text            string         `json:"text,omitempty"`
+	ConnectorLabel  string         `json:"connector_label,omitempty"`
+	LabelStyle      map[string]any `json:"label_style,omitempty"`
+	ParentID        string         `json:"parent_id,omitempty"`
+	ChildIDs        []string       `json:"child_ids,omitempty"`
+	DisplayMode     string         `json:"display_mode,omitempty"`
+	Hidden          bool           `json:"hidden,omitempty"`
+	XYWH            []float64      `json:"xywh,omitempty"`
+	SourceID        string         `json:"source_id,omitempty"`
+	ConnectorSource string         `json:"connector_source,omitempty"`
+	ConnectorTarget string         `json:"connector_target,omitempty"`
+	IntegrityIssues []string       `json:"integrity_issues,omitempty"`
 }
 
 func SearchDoc(cfg *config.Config, opts SearchOptions) (SearchResult, error) {
@@ -109,7 +111,7 @@ func SearchBlocks(docID string, blocks map[string]map[string]any, opts SearchOpt
 			return result, nil
 		}
 	}
-	for _, entity := range surfaceConnectorEntities(blocks) {
+	for _, entity := range surfaceConnectorEntities(blocks, opts.TextLimit) {
 		if !add(entity) {
 			break
 		}
@@ -197,7 +199,7 @@ func searchKind(block map[string]any) string {
 	}
 }
 
-func surfaceConnectorEntities(blocks map[string]map[string]any) []SearchEntity {
+func surfaceConnectorEntities(blocks map[string]map[string]any, textLimit int) []SearchEntity {
 	var out []SearchEntity
 	for _, surfaceID := range sortedBlockIDs(blocks) {
 		surface := blocks[surfaceID]
@@ -216,6 +218,9 @@ func surfaceConnectorEntities(blocks map[string]map[string]any) []SearchEntity {
 				ID:              id,
 				Kind:            "connector",
 				Flavour:         "affine:connector",
+				Text:            truncateRunes(connectorLabelText(el), optsTextLimit(textLimit)),
+				ConnectorLabel:  connectorLabelText(el),
+				LabelStyle:      mapAny(el["labelStyle"]),
 				ParentID:        surfaceID,
 				ConnectorSource: sourceID,
 				ConnectorTarget: targetID,
@@ -227,6 +232,22 @@ func surfaceConnectorEntities(blocks map[string]map[string]any) []SearchEntity {
 		}
 	}
 	return out
+}
+
+func optsTextLimit(limit int) int {
+	if limit <= 0 {
+		return 240
+	}
+	return limit
+}
+
+func connectorLabelText(el map[string]any) string {
+	for _, key := range []string{"text", "label", "labelText"} {
+		if text := stringField(el, key); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func nativeElements(raw any) map[string]any {

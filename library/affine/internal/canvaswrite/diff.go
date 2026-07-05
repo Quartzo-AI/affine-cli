@@ -118,7 +118,11 @@ func diffSearchOptions(opts DiffOptions) (SearchOptions, SearchOptions, error) {
 }
 
 func compareEntity(result *DiffResult, before, after SearchEntity) {
-	if before.Text != after.Text {
+	if before.Kind == "connector" || after.Kind == "connector" {
+		if before.ConnectorLabel != after.ConnectorLabel {
+			result.addDiff(DiffIssue{Category: "connector_label_changed", Severity: "info", ID: before.ID, Before: before.ConnectorLabel, After: after.ConnectorLabel, SuggestedNextAction: "Review connector label text before applying label updates."})
+		}
+	} else if before.Text != after.Text {
 		result.addDiff(DiffIssue{Category: "text_changed", Severity: "warning", ID: before.ID, Before: before.Text, After: after.Text, SuggestedNextAction: "Review text delta before planning a transform."})
 	}
 	if !reflect.DeepEqual(before.XYWH, after.XYWH) {

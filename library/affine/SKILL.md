@@ -5,15 +5,6 @@ author: "gabrieldasf"
 license: "Apache-2.0"
 argument-hint: "<command> [args] | install cli|mcp"
 allowed-tools: "Read Bash"
-metadata:
-  openclaw:
-    requires:
-      bins:
-        - affine-pp-cli
-    install:
-      - kind: go
-        bins: [affine-pp-cli]
-        module: github.com/mvanhorn/printing-press-library/library/productivity/affine/cmd/affine-pp-cli
 ---
 
 # Affine — Printing Press CLI
@@ -71,6 +62,14 @@ These capabilities aren't available in any other tool for this API.
 
   ```bash
   affine-pp-cli canvas transform --selectors search.json --move 10,0 --json
+  ```
+- **`canvas label-plan`** - Builds dry-run AFFiNE canvas connector label update plans from selected connectors.
+
+  _Use this to name arrows only after connector selectors and label text have been reviewed._
+
+  ```bash
+  affine-pp-cli canvas label-plan --selectors connectors.json --label edge-id="Reviewed Label" --json
+  affine-pp-cli canvas apply --plan connector-labels.json --live --workspace <workspace-id> --doc <doc-id> --backup-dir ./backups --yes --json
   ```
 - **`canvas model`** — Normalizes AFFiNE canvas JSON into explicit nodes and connectors.
 

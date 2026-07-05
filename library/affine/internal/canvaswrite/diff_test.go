@@ -8,7 +8,7 @@ func TestDiffSearchResultsReportsCoreCategories(t *testing.T) {
 		Count:      4,
 		Entities: []SearchEntity{
 			{ID: "card", Kind: "card", Text: "Old", DisplayMode: "edgeless", XYWH: []float64{0, 0, 100, 100}, SourceID: "img-old"},
-			{ID: "edge", Kind: "connector", ConnectorSource: "a", ConnectorTarget: "b"},
+			{ID: "edge", Kind: "connector", ConnectorSource: "a", ConnectorTarget: "b", ConnectorLabel: "Old Label", Text: "Old Label"},
 			{ID: "broken", Kind: "block", IntegrityIssues: []string{"missing_children"}},
 			{ID: "removed", Kind: "block"},
 		},
@@ -19,7 +19,7 @@ func TestDiffSearchResultsReportsCoreCategories(t *testing.T) {
 		Entities: []SearchEntity{
 			{ID: "added", Kind: "block"},
 			{ID: "card", Kind: "card", Text: "New", DisplayMode: "embed", XYWH: []float64{10, 0, 100, 100}, SourceID: "img-new"},
-			{ID: "edge", Kind: "connector", ConnectorSource: "a", ConnectorTarget: "c"},
+			{ID: "edge", Kind: "connector", ConnectorSource: "a", ConnectorTarget: "c", ConnectorLabel: "New Label", Text: "New Label"},
 			{ID: "broken", Kind: "block", IntegrityIssues: []string{"unreachable_block"}},
 		},
 	}
@@ -32,6 +32,7 @@ func TestDiffSearchResultsReportsCoreCategories(t *testing.T) {
 		"geometry_changed",
 		"display_mode_changed",
 		"relinked",
+		"connector_label_changed",
 		"image_source_changed",
 		"integrity_changed",
 		"unreachable",

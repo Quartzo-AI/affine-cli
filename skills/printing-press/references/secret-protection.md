@@ -235,7 +235,7 @@ per finding — that creates rubber-stamp fatigue). Per-finding format:
 PII review (3 findings):
 
   proofs/acceptance.md:42  email     trevin@trevinchow.com
-  proofs/acceptance.md:48  email     henryopenclaw@gmail.com
+  proofs/acceptance.md:48  email     henrylegacy-agent-host@gmail.com
   proofs/dogfood.md:108   name      Henry Claw
 
 Action:
@@ -272,7 +272,7 @@ No user prompt.
 
 **Example 2: real attendee in a dogfood report.** Input proof file contains:
 ```
-Returned 1 real booking (Henry Claw 15-min meeting, attendee henryopenclaw@gmail.com).
+Returned 1 real booking (Henry Claw 15-min meeting, attendee henrylegacy-agent-host@gmail.com).
 ```
 Tier 2 matches `email` and `name-pattern`. The email's domain (`gmail.com`) is
 not in the allowlist; "Henry Claw" is not in spec-derived terms. Both surface in
