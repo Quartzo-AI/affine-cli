@@ -65,7 +65,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: library/affine/go.sum
 
+      # v9 + an explicit version is required, not cosmetic: the action's older
+      # default ships a golangci-lint built with Go 1.24, which refuses a
+      # go 1.26 target with "language version used to build golangci-lint is
+      # lower than the targeted Go version". v2.11.4 is what upstream pinned.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
+          version: v2.11.4
+          verify: false
           working-directory: library/affine
