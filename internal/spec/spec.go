@@ -7,8 +7,10 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -47,7 +49,9 @@ const (
 	ResponseFormatJSON   = "json"
 	ResponseFormatCSV    = "csv"
 	ResponseFormatHTML   = "html"
+	ResponseFormatXML    = "xml"
 	ResponseFormatBinary = "binary"
+	ResponseFormatText   = "text"
 )
 
 const (
@@ -91,6 +95,7 @@ const (
 const (
 	HTMLExtractModePage         = "page"
 	HTMLExtractModeLinks        = "links"
+	HTMLExtractModeTable        = "table"
 	HTMLExtractModeEmbeddedJSON = "embedded-json"
 )
 
@@ -197,12 +202,11 @@ type APISpec struct {
 	// name in `server.NewMCPServer(...)`. Authors can set it explicitly
 	// (e.g. "Company GOAT", "Cal.com", "PokéAPI") to preserve unusual
 	// capitalization or punctuation; when empty the generator title-cases
-	// Name as a fallback. The generate command also fills this from a
-	// matching catalog entry's display_name when available.
+	// Name as a fallback.
 	DisplayName string `yaml:"display_name,omitempty" json:"display_name,omitempty"`
 	// DisplayNameDerivedFromTitle marks OpenAPI parser fallbacks from
-	// info.title. Catalog enrichment may replace that fallback, but must not
-	// replace explicit display_name / x-display-name values.
+	// info.title. Manifest regeneration may replace that fallback, but must
+	// not replace explicit display_name / x-display-name values.
 	DisplayNameDerivedFromTitle bool `yaml:"-" json:"-"`
 	// BaseURLIsPlaceholder is set by parsers that filled BaseURL with the
 	// PlaceholderBaseURL fallback because the source declared no real host.
@@ -283,38 +287,52 @@ type APISpec struct {
 	// (so older skills/library tooling that still read them keep working
 	// during the transition window). Derived from Creator at write time; a
 	// future major release removes them. See AGENTS.md "Attribution".
-	Owner           string              `yaml:"owner,omitempty" json:"owner,omitempty"`                   // legacy: slug, derived from Creator.Handle
-	OwnerName       string              `yaml:"owner_name,omitempty" json:"owner_name,omitempty"`         // legacy: display, derived from Creator.Name
-	Printer         string              `yaml:"printer,omitempty" json:"printer,omitempty"`               // legacy: @handle, derived from Creator.Handle
-	PrinterName     string              `yaml:"printer_name,omitempty" json:"printer_name,omitempty"`     // legacy: display, derived from Creator.Name
-	Kind            string              `yaml:"kind,omitempty" json:"kind,omitempty"`                     // "rest" (default) or "synthetic" — synthetic CLIs aggregate multiple sources beyond the spec; dogfood's path-validity check is relaxed accordingly
-	Source          string              `yaml:"source,omitempty" json:"source,omitempty"`                 // source archetype; local-sqlite declares an operator-local SQLite source with no HTTP base URL
-	SpecSource      string              `yaml:"spec_source,omitempty" json:"spec_source,omitempty"`       // official, community, sniffed, docs — affects generated client defaults
-	ClientPattern   string              `yaml:"client_pattern,omitempty" json:"client_pattern,omitempty"` // rest (default), proxy-envelope — affects generated HTTP client
-	HTTPTransport   string              `yaml:"http_transport,omitempty" json:"http_transport,omitempty"` // standard (default for official APIs), browser-http, browser-chrome, browser-chrome-h2, or browser-chrome-h3
-	RateClass       string              `yaml:"rate_class,omitempty" json:"rate_class,omitempty"`         // per-second, daily, monthly, or unlimited — affects generated sync concurrency defaults
-	HealthCheckPath string              `yaml:"health_check_path,omitempty" json:"health_check_path,omitempty"`
-	ProxyRoutes     map[string]string   `yaml:"proxy_routes,omitempty" json:"proxy_routes,omitempty"`    // path prefix → service name for proxy-envelope routing
-	BearerRefresh   BearerRefreshConfig `yaml:"bearer_refresh,omitempty" json:"bearer_refresh,omitzero"` // live-source metadata for rotating public client bearer tokens
-	WebsiteURL      string              `yaml:"website_url,omitempty" json:"website_url,omitempty"`      // product/company website (not the API base URL)
-	Category        string              `yaml:"category,omitempty" json:"category,omitempty"`            // catalog category (e.g., productivity, developer-tools) — used for library install path
-	Regions         []string            `yaml:"regions,omitempty" json:"regions,omitempty"`              // geographic availability/scope tokens (ISO 3166-1 alpha-2 like NL, EU, or * for global)
-	APILanguage     string              `yaml:"api_language,omitempty" json:"api_language,omitempty"`    // BCP 47 language tag for the API's native/domain language
-	Auth            AuthConfig          `yaml:"auth" json:"auth"`
-	AuthWarnings    []string            `yaml:"auth_warnings,omitempty" json:"auth_warnings,omitempty"`
-	Roles           []string            `yaml:"roles,omitempty" json:"roles,omitempty"` // per-spec authenticated persona labels that endpoints may require (e.g. parent, teacher, admin)
-	TierRouting     TierRoutingConfig   `yaml:"tier_routing,omitempty" json:"tier_routing,omitzero"`
-	RequiredHeaders []RequiredHeader    `yaml:"required_headers,omitempty" json:"required_headers,omitempty"`
-	Config          ConfigSpec          `yaml:"config" json:"config"`
-	Resources       map[string]Resource `yaml:"resources" json:"resources"`
-	Types           map[string]TypeDef  `yaml:"types" json:"types"`
-	ExtraCommands   []ExtraCommand      `yaml:"extra_commands,omitempty" json:"extra_commands,omitempty"` // hand-written cobra commands declared so SKILL.md can document them; spec-only metadata, no code generated
-	Cache           CacheConfig         `yaml:"cache,omitempty" json:"cache"`                             // cache freshness + auto-refresh config; when enabled, generated read commands auto-refresh stale local data before serving
-	Share           ShareConfig         `yaml:"share,omitempty" json:"share"`                             // git-backed snapshot sharing config; when enabled, emits a `share` subcommand that publishes/subscribes to a git repo
-	Learn           LearnConfig         `yaml:"learn,omitempty" json:"learn,omitzero"`                    // self-learning loop config: ticker patterns, stopwords, and entity-lookup seeds the generated CLI uses to cache teaches and generalize through entity substitution. Absent or disabled is a benign no-op.
-	MCP             MCPConfig           `yaml:"mcp,omitempty" json:"mcp"`                                 // MCP server generation config; when unset, small APIs (typed-endpoint count <= DefaultRemoteTransportEndpointThreshold) get stdio+http compiled in by APISpec.EffectiveMCPTransports so the same binary can serve cloud-hosted agents. Larger APIs without an explicit orchestration mode default to the Cloudflare MCP pattern during generation. Opting into http explicitly adds a --transport/--addr flag surface regardless of size.
-	Throttling      ThrottlingConfig    `yaml:"throttling,omitempty" json:"throttling"`                   // cost-based throttling config; when Enabled with a recognized Shape, the generator emits a ThrottleState (generic harness) plus a per-Shape parser that reads the API's cost bucket. Only the "shopify" Shape ships in v1.
-	Streaming       StreamingConfig     `yaml:"streaming,omitempty" json:"streaming"`                     // streaming-primary ingest config; when Transport is websocket, emits a live ws sync scaffold plus REST metadata refresh and rebase-log support.
+	Owner         string `yaml:"owner,omitempty" json:"owner,omitempty"`                   // legacy: slug, derived from Creator.Handle
+	OwnerName     string `yaml:"owner_name,omitempty" json:"owner_name,omitempty"`         // legacy: display, derived from Creator.Name
+	Printer       string `yaml:"printer,omitempty" json:"printer,omitempty"`               // legacy: @handle, derived from Creator.Handle
+	PrinterName   string `yaml:"printer_name,omitempty" json:"printer_name,omitempty"`     // legacy: display, derived from Creator.Name
+	Kind          string `yaml:"kind,omitempty" json:"kind,omitempty"`                     // "rest" (default) or "synthetic" — synthetic CLIs aggregate multiple sources beyond the spec; dogfood's path-validity check is relaxed accordingly
+	Source        string `yaml:"source,omitempty" json:"source,omitempty"`                 // source archetype; local-sqlite declares an operator-local SQLite source with no HTTP base URL
+	SpecSource    string `yaml:"spec_source,omitempty" json:"spec_source,omitempty"`       // official, community, sniffed, docs — affects generated client defaults
+	ClientPattern string `yaml:"client_pattern,omitempty" json:"client_pattern,omitempty"` // rest (default), proxy-envelope — affects generated HTTP client
+	// ResponseEnvelopeKey opts the generated HTTP client into unwrapping a
+	// single-key JSON response object whose key is known from the API spec.
+	// Empty leaves the response body unchanged.
+	ResponseEnvelopeKey string `yaml:"response_envelope_key,omitempty" json:"response_envelope_key,omitempty"`
+	HTTPTransport       string `yaml:"http_transport,omitempty" json:"http_transport,omitempty"` // standard (default for official APIs), browser-http, browser-chrome, browser-chrome-h2, or browser-chrome-h3
+	RateClass           string `yaml:"rate_class,omitempty" json:"rate_class,omitempty"`         // per-second, daily, monthly, or unlimited — affects generated sync concurrency defaults
+	// DefaultRateLimit sets the built-in default for the generated CLI's
+	// --rate-limit flag. "auto" selects the header-driven adaptive limiter
+	// (client.RateLimitAuto) so the CLI paces itself to the server's
+	// X-Ratelimit-* headers with no hardcoded ceiling; a numeric string
+	// (e.g. "2") pins a fixed requests-per-second ceiling. Empty keeps the
+	// legacy provenance default (2 for sniffed specs, else 0 = disabled).
+	// Populated from the yaml field or the OpenAPI x-pp-default-rate-limit
+	// extension.
+	DefaultRateLimit string              `yaml:"default_rate_limit,omitempty" json:"default_rate_limit,omitempty"`
+	HealthCheckPath  string              `yaml:"health_check_path,omitempty" json:"health_check_path,omitempty"`
+	ProxyRoutes      map[string]string   `yaml:"proxy_routes,omitempty" json:"proxy_routes,omitempty"`    // path prefix → service name for proxy-envelope routing
+	BearerRefresh    BearerRefreshConfig `yaml:"bearer_refresh,omitempty" json:"bearer_refresh,omitzero"` // live-source metadata for rotating public client bearer tokens
+	WebsiteURL       string              `yaml:"website_url,omitempty" json:"website_url,omitempty"`      // product/company website (not the API base URL)
+	Category         string              `yaml:"category,omitempty" json:"category,omitempty"`            // public-library category (e.g., productivity, developer-tools) — used for library install path
+	Regions          []string            `yaml:"regions,omitempty" json:"regions,omitempty"`              // geographic availability/scope tokens (ISO 3166-1 alpha-2 like NL, EU, or * for global)
+	APILanguage      string              `yaml:"api_language,omitempty" json:"api_language,omitempty"`    // BCP 47 language tag for the API's native/domain language
+	Auth             AuthConfig          `yaml:"auth" json:"auth"`
+	AuthWarnings     []string            `yaml:"auth_warnings,omitempty" json:"auth_warnings,omitempty"`
+	Roles            []string            `yaml:"roles,omitempty" json:"roles,omitempty"` // per-spec authenticated persona labels that endpoints may require (e.g. parent, teacher, admin)
+	TierRouting      TierRoutingConfig   `yaml:"tier_routing,omitempty" json:"tier_routing,omitzero"`
+	RequiredHeaders  []RequiredHeader    `yaml:"required_headers,omitempty" json:"required_headers,omitempty"`
+	Config           ConfigSpec          `yaml:"config" json:"config"`
+	Resources        map[string]Resource `yaml:"resources" json:"resources"`
+	Types            map[string]TypeDef  `yaml:"types" json:"types"`
+	ExtraCommands    []ExtraCommand      `yaml:"extra_commands,omitempty" json:"extra_commands,omitempty"` // hand-written cobra commands declared so SKILL.md can document them; spec-only metadata, no code generated
+	Cache            CacheConfig         `yaml:"cache,omitempty" json:"cache"`                             // cache freshness + auto-refresh config; when enabled, generated read commands auto-refresh stale local data before serving
+	Share            ShareConfig         `yaml:"share,omitempty" json:"share"`                             // git-backed snapshot sharing config; when enabled, emits a `share` subcommand that publishes/subscribes to a git repo
+	Learn            LearnConfig         `yaml:"learn,omitempty" json:"learn,omitzero"`                    // self-learning loop config: ticker patterns, stopwords, and entity-lookup seeds the generated CLI uses to cache teaches and generalize through entity substitution. Absent or disabled is a benign no-op.
+	MCP              MCPConfig           `yaml:"mcp,omitempty" json:"mcp"`                                 // MCP server generation config; when unset, small APIs (typed-endpoint count <= DefaultRemoteTransportEndpointThreshold) get stdio+http compiled in by APISpec.EffectiveMCPTransports so the same binary can serve cloud-hosted agents. Larger APIs without an explicit orchestration mode default to the Cloudflare MCP pattern during generation. Opting into http explicitly adds a --transport/--addr flag surface regardless of size.
+	Throttling       ThrottlingConfig    `yaml:"throttling,omitempty" json:"throttling"`                   // cost-based throttling config; when Enabled with a recognized Shape, the generator emits a ThrottleState (generic harness) plus a per-Shape parser that reads the API's cost bucket. Only the "shopify" Shape ships in v1.
+	Streaming        StreamingConfig     `yaml:"streaming,omitempty" json:"streaming"`                     // streaming-primary ingest config; when Transport is websocket, emits a live ws sync scaffold plus REST metadata refresh and rebase-log support.
+	QuerySync        *QuerySyncConfig    `yaml:"query_sync,omitempty" json:"query_sync,omitempty"`         // SQL-query-endpoint sync hint (QuickBooks Online / Salesforce SOQL): one shared query endpoint read with an injected SELECT, an entity-named result envelope, and in-query offset paging. When set, the sync generator emits the query injection + envelope unwrap + offset-paging loop by construction.
 }
 
 type TierRoutingConfig struct {
@@ -737,6 +755,33 @@ func validateStreaming(c StreamingConfig) error {
 	return nil
 }
 
+// validateQuerySync guards the SQL-query-endpoint hint. A query_template that
+// omits a placeholder generates a sync that sends a malformed query — the exact
+// silent-failure mode the hint exists to prevent — so the placeholders are
+// required up front rather than discovered against a live tenant. Absent hint
+// is a benign no-op.
+func validateQuerySync(q *QuerySyncConfig) error {
+	if q == nil {
+		return nil
+	}
+	if strings.TrimSpace(q.Path) == "" {
+		return fmt.Errorf("query_sync.path is required when query_sync is declared")
+	}
+	tmpl := strings.TrimSpace(q.QueryTemplate)
+	if tmpl == "" {
+		return fmt.Errorf("query_sync.query_template is required when query_sync is declared")
+	}
+	for _, placeholder := range []string{"{entity}", "{start}", "{limit}"} {
+		if !strings.Contains(tmpl, placeholder) {
+			return fmt.Errorf("query_sync.query_template must contain the %s placeholder for offset paging to work (got %q)", placeholder, q.QueryTemplate)
+		}
+	}
+	if (strings.TrimSpace(q.VersionParam) == "") != (strings.TrimSpace(q.VersionValue) == "") {
+		return fmt.Errorf("query_sync.version_param and query_sync.version_value must be set together")
+	}
+	return nil
+}
+
 // HasCostThrottling reports whether the spec opts into cost-based throttling
 // primitives. Used by the generator to gate emission of throttle.go and the
 // related conditional blocks in client.go / graphql_client.go / root.go.
@@ -931,6 +976,58 @@ func (s *APISpec) HasHTMLExtraction() bool {
 	return false
 }
 
+func (s *APISpec) HasTextResponse() bool {
+	if s == nil {
+		return false
+	}
+	for _, resource := range s.Resources {
+		if resourceHasTextResponse(resource) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *APISpec) HasRawRequest() bool {
+	if s == nil {
+		return false
+	}
+	for _, resource := range s.Resources {
+		if resourceHasRawRequest(resource) {
+			return true
+		}
+	}
+	return false
+}
+
+func resourceHasRawRequest(resource Resource) bool {
+	for _, endpoint := range resource.Endpoints {
+		if endpoint.UsesRawRequestBody() {
+			return true
+		}
+	}
+	for _, sub := range resource.SubResources {
+		if resourceHasRawRequest(sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func resourceHasTextResponse(resource Resource) bool {
+	for _, endpoint := range resource.Endpoints {
+		if endpoint.UsesTextResponse() {
+			return true
+		}
+	}
+	for _, sub := range resource.SubResources {
+		if resourceHasTextResponse(sub) {
+			return true
+		}
+	}
+	return false
+}
+
 func resourceHasHTMLExtraction(resource Resource) bool {
 	for _, endpoint := range resource.Endpoints {
 		if endpoint.UsesHTMLResponse() {
@@ -939,6 +1036,35 @@ func resourceHasHTMLExtraction(resource Resource) bool {
 	}
 	for _, sub := range resource.SubResources {
 		if resourceHasHTMLExtraction(sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasXMLResponse reports whether any endpoint in the spec declares
+// response_format: xml. The generated client gates its XML→JSON
+// normalization helper on this so JSON-only CLIs emit no XML code.
+func (s *APISpec) HasXMLResponse() bool {
+	if s == nil {
+		return false
+	}
+	for _, resource := range s.Resources {
+		if resourceHasXMLResponse(resource) {
+			return true
+		}
+	}
+	return false
+}
+
+func resourceHasXMLResponse(resource Resource) bool {
+	for _, endpoint := range resource.Endpoints {
+		if endpoint.UsesXMLResponse() {
+			return true
+		}
+	}
+	for _, sub := range resource.SubResources {
+		if resourceHasXMLResponse(sub) {
 			return true
 		}
 	}
@@ -1007,7 +1133,7 @@ func (c BearerRefreshConfig) Enabled() bool {
 
 type AuthConfig struct {
 	Type                   string       `yaml:"type" json:"type"`                           // api_key, oauth2, oauth2_refresh, bearer_token, cookie, composed, session_handshake, none
-	Subtype                string       `yaml:"subtype,omitempty" json:"subtype,omitempty"` // optional refinement of Type. Currently used for "auth0_spa_in_memory": bearer_token whose JWT lives in JS heap (Auth0 SPA SDK v2+ with cacheLocation: memory) and is reachable only via CDP runtime interception, not via cookie/localStorage extraction. Mirrors x-auth-subtype on the OpenAPI security scheme.
+	Subtype                string       `yaml:"subtype,omitempty" json:"subtype,omitempty"` // optional refinement of Type. Recognized values include "google_service_account" for service-account JWT exchange and "auth0_spa_in_memory" for bearer tokens whose JWT lives in JS heap (Auth0 SPA SDK v2+ with cacheLocation: memory) and is reachable only via CDP runtime interception, not via cookie/localStorage extraction. Mirrors x-auth-subtype on the OpenAPI security scheme.
 	Header                 string       `yaml:"header" json:"header"`
 	Prefix                 string       `yaml:"prefix,omitempty" json:"prefix,omitempty"` // Authorization scheme word (e.g., "Token", "PRIVATE-TOKEN"); empty defaults to "Bearer". Ignored when Format is set.
 	Format                 string       `yaml:"format" json:"format"`
@@ -1125,6 +1251,10 @@ const (
 	RefreshTokenMechanismKindScope = "scope"
 	RefreshTokenMechanismKindQuery = "query"
 )
+
+// AuthSubtypeGoogleServiceAccount marks a Google OAuth2 bearer spec whose
+// generated CLI can exchange a service-account JSON key for a bearer token.
+const AuthSubtypeGoogleServiceAccount = "google_service_account"
 
 // AuthSubtypeAuth0SPAInMemory marks a bearer_token spec whose access token is
 // held in JS heap by the Auth0 SPA SDK (cacheLocation: memory) and is reachable
@@ -1483,7 +1613,12 @@ func (c AuthConfig) HasCompanionHints() bool {
 // auth.cookies when they need jar plumbing, and a composed-auth spec
 // without auth.cookies has nothing to persist.
 func (c AuthConfig) HasCookies() bool {
-	return len(c.Cookies) > 0
+	for _, name := range c.Cookies {
+		if strings.TrimSpace(name) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // HasNonCookieAuth reports whether the auth block exposes at least one
@@ -1553,6 +1688,16 @@ func validateHTTPSURL(label, raw string) error {
 	}
 }
 
+func validateAuthURL(label, raw string) error {
+	if strings.ContainsAny(raw, "{}<>") {
+		return fmt.Errorf("%s contains an unresolved placeholder; supply a concrete URL before generation", label)
+	}
+	if err := validateHTTPSURL(label, raw); err != nil {
+		return err
+	}
+	return nil
+}
+
 // validateOAuth2Grant ensures OAuth2Grant is empty or one of the supported
 // values. Empty is accepted (treated as the default). Cross-checking against
 // validateAuthPrefix rejects characters that would break out of the Go
@@ -1582,14 +1727,18 @@ func validateAuthPrefix(c AuthConfig) error {
 }
 
 // validateAuthSubtype rejects unrecognized auth.subtype values so authoring
-// typos fail fast rather than silently bypassing the runtime emission. Only
-// auth0_spa_in_memory is recognized today; the field is otherwise expected to
-// be empty.
+// typos fail fast rather than silently bypassing the runtime emission.
 func validateAuthSubtype(c AuthConfig) error {
 	if c.Subtype == "" {
 		return nil
 	}
 	switch c.Subtype {
+	case AuthSubtypeGoogleServiceAccount:
+		if c.Type != "" && c.Type != "bearer_token" {
+			return fmt.Errorf("auth.subtype %q requires auth.type %q (got %q)",
+				c.Subtype, "bearer_token", c.Type)
+		}
+		return nil
 	case AuthSubtypeAuth0SPAInMemory:
 		// Subtype refines bearer_token; reject the combination if the
 		// underlying type doesn't fit. Auth0 SPA tokens are always
@@ -1600,9 +1749,158 @@ func validateAuthSubtype(c AuthConfig) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("auth.subtype %q is not recognized (valid: %q)",
-			c.Subtype, AuthSubtypeAuth0SPAInMemory)
+		return fmt.Errorf("auth.subtype %q is not recognized (valid: %q, %q)",
+			c.Subtype, AuthSubtypeGoogleServiceAccount, AuthSubtypeAuth0SPAInMemory)
 	}
+}
+
+func validateAuthConfig(context string, auth AuthConfig) error {
+	switch strings.ToLower(strings.TrimSpace(auth.Type)) {
+	case "cookie":
+		if !auth.HasCookies() {
+			if len(auth.Cookies) != 0 || !isHeaderCarriedCookieAuth(auth) {
+				return fmt.Errorf("%s.type is %q but %s.cookies is empty; the generated client would never send cookies", context, auth.Type, context)
+			}
+		}
+		for _, name := range auth.Cookies {
+			if strings.TrimSpace(name) == "" {
+				return fmt.Errorf("%s.cookies contains an empty cookie name", context)
+			}
+		}
+	case "composed":
+		if !auth.HasCookies() {
+			return fmt.Errorf("%s.type is %q but %s.cookies is empty; the generated client would never send cookies", context, auth.Type, context)
+		}
+		for _, name := range auth.Cookies {
+			if strings.TrimSpace(name) == "" {
+				return fmt.Errorf("%s.cookies contains an empty cookie name", context)
+			}
+		}
+	}
+	return validateAuthFormat(context, auth)
+}
+
+func isHeaderCarriedCookieAuth(auth AuthConfig) bool {
+	header := strings.TrimSpace(auth.Header)
+	if !strings.EqualFold(strings.TrimSpace(auth.In), "header") ||
+		header == "" ||
+		strings.EqualFold(header, "Cookie") ||
+		strings.TrimSpace(auth.Format) == "" {
+		return false
+	}
+	for _, envVar := range auth.EnvVarSpecs {
+		if strings.TrimSpace(envVar.Name) != "" && envVar.IsRequestCredential() {
+			return true
+		}
+	}
+	if len(auth.EnvVarSpecs) != 0 {
+		return false
+	}
+	for _, envVar := range auth.EnvVars {
+		if strings.TrimSpace(envVar) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func validateAuthFormat(context string, auth AuthConfig) error {
+	if auth.Format == "" {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(auth.Type)) {
+	case "api_key", "bearer_token", "oauth2", "oauth2_refresh":
+	case "cookie":
+		if !isHeaderCarriedCookieAuth(auth) {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	matches := authFormatPlaceholderRe.FindAllStringSubmatch(auth.Format, -1)
+	if len(matches) == 0 {
+		return fmt.Errorf("%s.format must contain a placeholder like {token} (got %q)", context, auth.Format)
+	}
+	if remaining := authFormatPlaceholderRe.ReplaceAllString(auth.Format, ""); strings.Contains(remaining, "{") {
+		return fmt.Errorf("%s.format contains invalid placeholder syntax (got %q)", context, auth.Format)
+	}
+
+	allowed := authFormatPlaceholderSet(auth)
+	if len(allowed) == 0 {
+		return fmt.Errorf("%s.format placeholder %q has no env_var mapping; declare an auth env-var credential", context, matches[0][0])
+	}
+	expected := make([]string, 0, len(allowed))
+	for placeholder := range allowed {
+		expected = append(expected, placeholder)
+	}
+	slices.Sort(expected)
+	for _, match := range matches {
+		if _, ok := allowed[match[1]]; !ok {
+			return fmt.Errorf("%s.format placeholder %q has no env_var mapping; expected one of: {%s}",
+				context, match[0], strings.Join(expected, ", "))
+		}
+	}
+	return nil
+}
+
+func authFormatPlaceholderSet(auth AuthConfig) map[string]struct{} {
+	allowed := make(map[string]struct{})
+	authType := strings.ToLower(strings.TrimSpace(auth.Type))
+
+	requestEnvVars := make([]AuthEnvVar, 0, len(auth.EnvVarSpecs))
+	for _, envVar := range auth.EnvVarSpecs {
+		if envVar.IsRequestCredential() {
+			requestEnvVars = append(requestEnvVars, envVar)
+		}
+	}
+	if len(requestEnvVars) == 0 && len(auth.EnvVarSpecs) == 0 {
+		for _, name := range auth.EnvVars {
+			requestEnvVars = append(requestEnvVars, AuthEnvVar{Name: name})
+		}
+	}
+
+	if authType != "api_key" || len(requestEnvVars) > 0 {
+		allowed["token"] = struct{}{}
+	}
+	basicAuth := authType == "api_key" && strings.Contains(strings.ToLower(auth.Format), "basic ")
+	if authType == "oauth2" || authType == "oauth2_refresh" || authType == "bearer_token" || authType == "cookie" {
+		allowed["access_token"] = struct{}{}
+	}
+	if auth.IsAuthEnvVarORCase() && !basicAuth && len(requestEnvVars) > 1 {
+		return allowed
+	}
+	if authType == "bearer_token" && len(requestEnvVars) > 1 {
+		return allowed
+	}
+	if basicAuth {
+		if len(requestEnvVars) > 2 {
+			requestEnvVars = requestEnvVars[:2]
+		}
+		switch len(requestEnvVars) {
+		case 1:
+			allowed["access_token"] = struct{}{}
+		default:
+			if len(requestEnvVars) > 0 {
+				allowed["username"] = struct{}{}
+				allowed["user"] = struct{}{}
+			}
+			if len(requestEnvVars) > 1 {
+				allowed["password"] = struct{}{}
+				allowed["secret"] = struct{}{}
+				allowed["access_token"] = struct{}{}
+			}
+		}
+	}
+	for _, envVar := range requestEnvVars {
+		name := strings.TrimSpace(envVar.Name)
+		if name == "" {
+			continue
+		}
+		allowed[name] = struct{}{}
+		allowed[naming.EnvVarPlaceholder(name)] = struct{}{}
+	}
+	return allowed
 }
 
 // AuthConfig.Type is intentionally skipped: the field is ignored for
@@ -1610,6 +1908,16 @@ func validateAuthSubtype(c AuthConfig) error {
 func validateOAuth2Grant(c AuthConfig) error {
 	switch c.OAuth2Grant {
 	case "", OAuth2GrantAuthorizationCode, OAuth2GrantClientCredentials, OAuth2GrantDeviceCode:
+		if (c.OAuth2Grant == "" || c.OAuth2Grant == OAuth2GrantAuthorizationCode) && strings.TrimSpace(c.TokenURL) != "" {
+			if err := validateAuthURL("auth.token_url", c.TokenURL); err != nil {
+				return err
+			}
+		}
+		if c.OAuth2Grant == OAuth2GrantClientCredentials && strings.TrimSpace(c.TokenURL) != "" {
+			if err := validateAuthURL("auth.token_url", c.TokenURL); err != nil {
+				return err
+			}
+		}
 		if c.OAuth2Grant == OAuth2GrantDeviceCode {
 			if strings.TrimSpace(c.DeviceAuthorizationURL) == "" {
 				return fmt.Errorf("auth.device_authorization_url is required when auth.oauth2_grant is %q", OAuth2GrantDeviceCode)
@@ -1617,10 +1925,10 @@ func validateOAuth2Grant(c AuthConfig) error {
 			if strings.TrimSpace(c.TokenURL) == "" {
 				return fmt.Errorf("auth.token_url is required when auth.oauth2_grant is %q", OAuth2GrantDeviceCode)
 			}
-			if err := validateHTTPSURL("auth.device_authorization_url", c.DeviceAuthorizationURL); err != nil {
+			if err := validateAuthURL("auth.device_authorization_url", c.DeviceAuthorizationURL); err != nil {
 				return err
 			}
-			if err := validateHTTPSURL("auth.token_url", c.TokenURL); err != nil {
+			if err := validateAuthURL("auth.token_url", c.TokenURL); err != nil {
 				return err
 			}
 		}
@@ -1638,7 +1946,7 @@ func validateOAuth2Refresh(c AuthConfig) error {
 	if strings.TrimSpace(c.TokenURL) == "" {
 		return fmt.Errorf("auth.token_url is required when auth.type is %q", AuthTypeOAuth2Refresh)
 	}
-	if err := validateHTTPSURL("auth.token_url", c.TokenURL); err != nil {
+	if err := validateAuthURL("auth.token_url", c.TokenURL); err != nil {
 		return err
 	}
 	return nil
@@ -1733,10 +2041,38 @@ type ShareConfig struct {
 // outer map key (e.g., "country", "team"); each value is an ordered list
 // of canonical entities and their aliases.
 type LearnConfig struct {
-	Enabled           bool                    `yaml:"enabled,omitempty" json:"enabled,omitempty"`                         // master switch; when false, the loop's commands and pre-seeding hook are not emitted
+	Enabled           bool                    `yaml:"enabled" json:"enabled,omitempty"`                                   // master switch; when false, the loop's commands and pre-seeding hook are not emitted
+	Disabled          bool                    `yaml:"disabled,omitempty" json:"disabled,omitempty"`                       // generation-time opt-out. A plain Enabled bool cannot distinguish "explicitly off" from "absent" once the generator defaults the loop on, so this is the authoritative off switch. Contradicts an explicit enabled: true and is rejected at parse time.
+	EnabledSet        bool                    `yaml:"-" json:"-"`                                                         // internal presence bit: legacy specs with learn.enabled: false remain opted out when the default-on pass runs.
 	TickerPatterns    []string                `yaml:"ticker_patterns,omitempty" json:"ticker_patterns,omitempty"`         // Go regexp patterns the recall path uses to recognize resource identifiers in free-text. Each value must compile via regexp.Compile.
 	Stopwords         []string                `yaml:"stopwords,omitempty" json:"stopwords,omitempty"`                     // domain-specific stopwords stripped from queries before recall match; merged with a built-in default set. Whitespace-only entries are dropped at parse time.
+	Synonyms          map[string]string       `yaml:"synonyms,omitempty" json:"synonyms,omitempty"`                       // per-CLI variant -> canonical query-phrasing folds (e.g., "last night" -> "yesterday") applied symmetrically at write and read so same-referent phrasings share one query family. Keys and values must be lowercase; chains are rejected so folding is a single hop.
 	EntityLookupSeeds map[string][]LookupSeed `yaml:"entity_lookup_seeds,omitempty" json:"entity_lookup_seeds,omitempty"` // canonical-name + aliases table keyed by seed kind (e.g., "country"). Used by the recall path to substitute one entity for another and generalize learned templates.
+}
+
+func (c *LearnConfig) UnmarshalYAML(value *yaml.Node) error {
+	type learnConfigAlias LearnConfig
+	var out learnConfigAlias
+	if err := value.Decode(&out); err != nil {
+		return err
+	}
+	*c = LearnConfig(out)
+	c.EnabledSet = yamlMappingHasKey(value, "enabled")
+	return nil
+}
+
+func (c *LearnConfig) UnmarshalJSON(data []byte) error {
+	type learnConfigAlias LearnConfig
+	var out learnConfigAlias
+	if err := json.Unmarshal(data, &out); err != nil {
+		return err
+	}
+	*c = LearnConfig(out)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err == nil {
+		_, c.EnabledSet = raw["enabled"]
+	}
+	return nil
 }
 
 // LookupSeed is one canonical entity plus optional aliases inside a
@@ -1920,10 +2256,18 @@ func absoluteRequestPathTemplateSource(path string) string {
 }
 
 type Endpoint struct {
-	Method      string `yaml:"method" json:"method"`
-	Path        string `yaml:"path" json:"path"`
+	Method string `yaml:"method" json:"method"`
+	Path   string `yaml:"path" json:"path"`
+	// Mutation explicitly marks an endpoint as mutating when its transport
+	// method is not enough to convey the side effect, such as a GET action.
+	// The generator uses this signal for MCP safety classification.
+	Mutation    bool   `yaml:"mutation,omitempty" json:"mutation,omitempty"`
 	BaseURL     string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
 	Description string `yaml:"description" json:"description"`
+	// Example is an optional Cobra Example string for this endpoint command.
+	// When empty, the generator synthesizes an example from command path and
+	// required inputs.
+	Example string `yaml:"example,omitempty" json:"example,omitempty"`
 	// DescriptionSynthesized marks descriptions generated by parser fallback
 	// when both summary and description are absent in the source operation.
 	// Internal-only provenance: never serialized.
@@ -1954,7 +2298,7 @@ type Endpoint struct {
 	BodyIsArray        bool        `yaml:"body_is_array,omitempty" json:"body_is_array,omitempty"`
 	RequestContentType string      `yaml:"request_content_type,omitempty" json:"request_content_type,omitempty"`
 	Response           ResponseDef `yaml:"response" json:"response"`
-	ResponseFormat     string      `yaml:"response_format,omitempty" json:"response_format,omitempty"` // json (default), csv, html, or binary
+	ResponseFormat     string      `yaml:"response_format,omitempty" json:"response_format,omitempty"` // json (default), csv, html, xml, binary, or text
 	// DataSourceStrategy declares how this endpoint's generated read command
 	// should interpret --data-source. Empty inherits the resource strategy,
 	// then defaults to "auto".
@@ -1967,6 +2311,11 @@ type Endpoint struct {
 	// conditional input contract. The runtime consumes it from the generated
 	// Cobra annotation `pp:happy-args`.
 	HappyArgs string `yaml:"happy_args,omitempty" json:"happy_args,omitempty"`
+	// LiveDogfoodRequiresTier declares the runner credential tier required
+	// before live dogfood should probe this endpoint. It is dogfood-only and
+	// does not select an upstream auth route; the runtime consumes it from the
+	// generated Cobra annotation `pp:requires-tier`.
+	LiveDogfoodRequiresTier string `yaml:"live_dogfood_requires_tier,omitempty" json:"live_dogfood_requires_tier,omitempty"`
 	// EmbeddedPagedSubresources names paged-envelope properties nested
 	// inside this endpoint's success response (e.g. GET /<resource>/{id}
 	// where the API caps the embedded sub-resource at the first page
@@ -1998,6 +2347,20 @@ type Endpoint struct {
 	// could be resolved; templates fall back to runtime list scanning. Internal
 	// YAML specs may set this directly.
 	IDField string `yaml:"id_field,omitempty" json:"id_field,omitempty"`
+	// TenantScopeColumn is the tenant discriminator column declared by the
+	// path-item-level `x-pp-tenant-scope-column` extension (e.g. "workspace").
+	// Self-declaring: the annotated collection's own rows carry this column.
+	// Consumed by tenant-scoped dependent fan-out (parent tables) and flat
+	// tenant-scoped reconcile (the swept table). Empty when unannotated.
+	TenantScopeColumn string `yaml:"tenant_scope_column,omitempty" json:"tenant_scope_column,omitempty"`
+	// MembershipField is a boolean field in this collection's own row payload
+	// (declared by the path-item-level `x-pp-membership-field` extension, e.g.
+	// "is_member") indicating whether the authenticated user is a member of the
+	// resource. Dependent fan-out over this parent table skips rows whose field
+	// is false — their sub-resources would 403 — reporting one clear "not a
+	// member" summary instead of a 403 per (sub-resource, parent). Empty when
+	// unannotated.
+	MembershipField string `yaml:"membership_field,omitempty" json:"membership_field,omitempty"`
 	// IDFieldFromPathParam is parser-only provenance used by the profiler to
 	// promote member-path primary-key hints onto same-resource list endpoints
 	// without re-inferring how IDField was resolved. It is intentionally not
@@ -2008,6 +2371,11 @@ type Endpoint struct {
 	// new (non-strict) exit-code policy. Populated from the path-item-level
 	// `x-critical` extension on OpenAPI specs; defaults to false.
 	Critical bool `yaml:"critical,omitempty" json:"critical,omitempty"`
+	// Syncable opts this endpoint into the generated default sync set even when
+	// the profiler's safety heuristic would otherwise exclude it for required
+	// path/query params. Use only when the spec supplies those inputs through
+	// defaults, template vars, or another generated runtime mechanism.
+	Syncable bool `yaml:"syncable,omitempty" json:"syncable,omitempty"`
 	// Walker, when present, declares this endpoint as a hierarchical child
 	// resource fetched by iterating a named parent. Used when the generator's
 	// path-param dependent-resource auto-detection would miss the link — for
@@ -2133,8 +2501,30 @@ func (e Endpoint) UsesBinaryResponse() bool {
 	return e.EffectiveResponseFormat() == ResponseFormatBinary
 }
 
+func (e Endpoint) UsesTextResponse() bool {
+	return e.EffectiveResponseFormat() == ResponseFormatText
+}
+
+func (e Endpoint) UsesRawRequestBody() bool {
+	contentType := strings.ToLower(strings.TrimSpace(e.RequestContentType))
+	if i := strings.Index(contentType, ";"); i >= 0 {
+		contentType = strings.TrimSpace(contentType[:i])
+	}
+	if contentType == "" ||
+		contentType == "application/json" ||
+		contentType == "text/json" ||
+		(strings.HasPrefix(contentType, "application/") && strings.HasSuffix(contentType, "+json")) {
+		return false
+	}
+	return contentType != "multipart/form-data" && contentType != "application/x-www-form-urlencoded"
+}
+
 func (e Endpoint) UsesCSVResponse() bool {
 	return e.EffectiveResponseFormat() == ResponseFormatCSV
+}
+
+func (e Endpoint) UsesXMLResponse() bool {
+	return e.EffectiveResponseFormat() == ResponseFormatXML
 }
 
 type HTMLExtract struct {
@@ -2175,22 +2565,37 @@ func (h *HTMLExtract) EffectiveScriptSelector() string {
 }
 
 type Param struct {
-	Name        string   `yaml:"name" json:"name"`
-	FlagName    string   `yaml:"flag_name,omitempty" json:"flag_name,omitempty"`
-	URLName     string   `yaml:"url_name,omitempty" json:"url_name,omitempty"`   // optional override for URL query-key emission (e.g., "$limit" for Socrata while keeping --limit flag)
-	BodyName    string   `yaml:"body_name,omitempty" json:"body_name,omitempty"` // optional override for request-body field emission while keeping the public name
-	Aliases     []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
-	Type        string   `yaml:"type" json:"type"`
-	Required    bool     `yaml:"required" json:"required"`
-	Positional  bool     `yaml:"positional" json:"positional"`
-	PathParam   bool     `yaml:"path_param,omitempty" json:"path_param,omitempty"` // true for path params rendered as flags (e.g., pagination)
-	GlobalScope bool     `yaml:"global_scope,omitempty" json:"global_scope,omitempty"`
-	Default     any      `yaml:"default" json:"default"`
-	Example     any      `yaml:"example,omitempty" json:"example,omitempty"`
-	Description string   `yaml:"description" json:"description"`
-	Fields      []Param  `yaml:"fields" json:"fields"`                     // for nested objects
-	Enum        []string `yaml:"enum,omitempty" json:"enum,omitempty"`     // enum constraints for the parameter
-	Format      string   `yaml:"format,omitempty" json:"format,omitempty"` // OpenAPI format hints (date-time, email, uri, etc.)
+	Name         string   `yaml:"name" json:"name"`
+	In           string   `yaml:"in,omitempty" json:"in,omitempty"` // parameter location: path, query, or header
+	FlagName     string   `yaml:"flag_name,omitempty" json:"flag_name,omitempty"`
+	URLName      string   `yaml:"url_name,omitempty" json:"url_name,omitempty"`   // optional override for URL query-key emission (e.g., "$limit" for Socrata while keeping --limit flag)
+	BodyName     string   `yaml:"body_name,omitempty" json:"body_name,omitempty"` // optional override for request-body field emission while keeping the public name
+	Aliases      []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+	Type         string   `yaml:"type" json:"type"`
+	Required     bool     `yaml:"required" json:"required"`
+	Positional   bool     `yaml:"positional" json:"positional"`
+	PathParam    bool     `yaml:"path_param,omitempty" json:"path_param,omitempty"` // true for path params rendered as flags (e.g., pagination)
+	GlobalScope  bool     `yaml:"global_scope,omitempty" json:"global_scope,omitempty"`
+	Default      any      `yaml:"default" json:"default"`
+	Example      any      `yaml:"example,omitempty" json:"example,omitempty"`
+	Description  string   `yaml:"description" json:"description"`
+	Fields       []Param  `yaml:"fields" json:"fields"`                     // for nested objects
+	Enum         []string `yaml:"enum,omitempty" json:"enum,omitempty"`     // enum constraints for the parameter
+	Format       string   `yaml:"format,omitempty" json:"format,omitempty"` // OpenAPI format hints (date-time, email, uri, etc.)
+	QueryStyle   string   `yaml:"query_style,omitempty" json:"query_style,omitempty"`
+	QueryExplode *bool    `yaml:"query_explode,omitempty" json:"query_explode,omitempty"`
+	// Maximum captures an inclusive numeric `maximum` schema constraint on the
+	// parameter. Sync uses it to clamp the page size it requests so a generated
+	// CLI never sends a page size the API rejects (e.g. a page_size param with
+	// maximum: 30).
+	Maximum *float64 `yaml:"maximum,omitempty" json:"maximum,omitempty"`
+	// ExclusiveMaximum captures an *exclusive* upper bound: the largest legal
+	// value is strictly below it. It normalizes both OpenAPI styles —
+	// 3.1's numeric `exclusiveMaximum: N`, and 3.0's `maximum: N` +
+	// `exclusiveMaximum: true` (which makes `maximum` exclusive). In OpenAPI
+	// 3.1 `maximum` and `exclusiveMaximum` are independent assertions, so both
+	// this and Maximum can be set; consumers take the most restrictive.
+	ExclusiveMaximum *float64 `yaml:"exclusive_maximum,omitempty" json:"exclusive_maximum,omitempty"`
 	// DispatchParam marks a fixed discriminator such as type=domain_rank.
 	// Generated runnable examples keep its default instead of substituting
 	// synthetic dogfood values that would address a different upstream route.
@@ -2245,6 +2650,52 @@ func (p Param) BodyWireName() string {
 	return p.Name
 }
 
+// MCPPropertyKeyPattern is the grammar Anthropic's Messages API enforces on
+// tool input_schema property keys. A generated MCP tool whose schema carries a
+// key outside this pattern bricks the calling agent session at schema load:
+// every subsequent turn fails with a 400 pattern-mismatch because the poisoned
+// tool definition rides along in every request (HelpFlow/aos-build#165).
+const MCPPropertyKeyPattern = `^[a-zA-Z0-9_.-]{1,64}$`
+
+// MCPPropertyKeyRe is the compiled form of MCPPropertyKeyPattern, shared by
+// the sanitizer below and the generator's post-dedup input-name assertion.
+var MCPPropertyKeyRe = regexp.MustCompile(MCPPropertyKeyPattern)
+
+// sanitizePublicInputName makes a wire parameter name safe to expose as a
+// model-facing MCP property key while leaving legal names byte-identical.
+// Each run of illegal characters becomes one "_", the result is trimmed of
+// leading/trailing "_", clamped to 64 chars, and re-trimmed. A name that
+// sanitizes to empty is returned RAW so the generator's post-dedup assertion
+// fails generation loudly instead of shipping an invented public name.
+func sanitizePublicInputName(name string) string {
+	if MCPPropertyKeyRe.MatchString(name) {
+		return name
+	}
+	var b strings.Builder
+	pendingSep := false
+	for _, r := range name {
+		legal := r == '.' || r == '-' || r == '_' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if legal {
+			if pendingSep && b.Len() > 0 {
+				b.WriteByte('_')
+			}
+			pendingSep = false
+			b.WriteRune(r)
+		} else {
+			pendingSep = true
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if len(out) > 64 {
+		out = strings.Trim(out[:64], "_")
+	}
+	if out == "" {
+		return name
+	}
+	return out
+}
+
 func (p Param) PublicInputName() string {
 	if p.FlagName != "" {
 		return p.FlagName
@@ -2252,7 +2703,7 @@ func (p Param) PublicInputName() string {
 	if p.IdentName != "" {
 		return publicInputNameFromIdent(p.IdentName)
 	}
-	return p.Name
+	return sanitizePublicInputName(p.Name)
 }
 
 func publicInputNameFromIdent(name string) string {
@@ -2517,8 +2968,12 @@ func bodyParamFromSchemaNode(name string, node *yaml.Node) (Param, error) {
 					return Param{}, err
 				}
 				param.Fields = fields
+				param.ItemType = "object"
 			} else if enum := schemaStringSlice(yamlMappingValue(items, "enum")); len(enum) > 0 {
 				param.Fields = []Param{{Name: "items", Type: "string", Enum: enum}}
+				param.ItemType = "string"
+			} else if itemType := strings.TrimSpace(schemaScalarValue(yamlMappingValue(items, "type"))); itemType != "" {
+				param.ItemType = itemType
 			}
 		}
 	}
@@ -2584,7 +3039,10 @@ type ResponseDiscriminator struct {
 	Mapping map[string]string `yaml:"mapping,omitempty" json:"mapping,omitempty"` // discriminator value -> schema/resource name
 }
 
-const PaginationTypeIDWalk = "id_walk"
+const (
+	PaginationTypeIDWalk = "id_walk"
+	PaginationTypeNone   = "none"
+)
 
 type Pagination struct {
 	Type           string `yaml:"type" json:"type"`                         // cursor, offset, page_token, page, id_walk
@@ -2592,6 +3050,81 @@ type Pagination struct {
 	CursorParam    string `yaml:"cursor_param" json:"cursor_param"`         // query param name for cursor (after, pageToken, offset, page)
 	NextCursorPath string `yaml:"next_cursor_path" json:"next_cursor_path"` // response field with next cursor (nextPageToken, cursor)
 	HasMoreField   string `yaml:"has_more_field" json:"has_more_field"`     // response field indicating more pages (has_more)
+}
+
+type paginationWire struct {
+	Type           string `yaml:"type" json:"type"`
+	LimitParam     string `yaml:"limit_param" json:"limit_param"`
+	CursorParam    string `yaml:"cursor_param" json:"cursor_param"`
+	NextCursorPath string `yaml:"next_cursor_path" json:"next_cursor_path"`
+	CursorField    string `yaml:"cursor_field" json:"cursor_field"`
+	HasMoreField   string `yaml:"has_more_field" json:"has_more_field"`
+}
+
+func (p *Pagination) UnmarshalYAML(value *yaml.Node) error {
+	var wire paginationWire
+	if err := value.Decode(&wire); err != nil {
+		return err
+	}
+	p.assignPaginationWire(wire)
+	return nil
+}
+
+func (p *Pagination) UnmarshalJSON(data []byte) error {
+	var wire paginationWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	p.assignPaginationWire(wire)
+	return nil
+}
+
+func (p *Pagination) assignPaginationWire(wire paginationWire) {
+	p.Type = wire.Type
+	p.LimitParam = wire.LimitParam
+	p.CursorParam = wire.CursorParam
+	p.NextCursorPath = wire.NextCursorPath
+	if p.NextCursorPath == "" {
+		p.NextCursorPath = wire.CursorField
+	}
+	p.HasMoreField = wire.HasMoreField
+}
+
+// QuerySyncConfig declares the SQL-query-endpoint sync shape: an API where every
+// list resource is read through one shared endpoint with an injected SELECT-style
+// query, results wrapped in an entity-named envelope, and paging carried inside
+// the query text (QuickBooks Online's STARTPOSITION/MAXRESULTS; Salesforce SOQL).
+// It is API-level cross-cutting config; the per-resource entity name is sourced
+// from each list endpoint's Response.Item, and a resource is a query resource
+// when its list path equals Path and it declares a ResponsePath. All
+// dialect-specific text lives here (in the spec), never in the generator — the
+// template substitutes the {entity}/{start}/{limit} placeholders at runtime.
+type QuerySyncConfig struct {
+	Path          string `yaml:"path" json:"path"`                                       // shared query endpoint path, e.g. "/query"
+	QueryParam    string `yaml:"query_param,omitempty" json:"query_param,omitempty"`     // query param carrying the SELECT; defaults to "query"
+	QueryTemplate string `yaml:"query_template" json:"query_template"`                   // SELECT + paging clause with {entity}/{start}/{limit} placeholders, e.g. "select * from {entity} startposition {start} maxresults {limit}"
+	VersionParam  string `yaml:"version_param,omitempty" json:"version_param,omitempty"` // optional extra param sent on every query call, e.g. "minorversion"
+	VersionValue  string `yaml:"version_value,omitempty" json:"version_value,omitempty"` // value for VersionParam, e.g. "75"
+	EnvelopeKey   string `yaml:"envelope_key,omitempty" json:"envelope_key,omitempty"`   // result-envelope object key added to the runtime extractor, e.g. "QueryResponse" (unwraps {EnvelopeKey:{<Entity>:[...]}})
+	PageSize      int    `yaml:"page_size,omitempty" json:"page_size,omitempty"`         // in-query page size ({limit}) and offset stride; defaults to 1000
+}
+
+// EffectiveQueryParam returns the configured query param name or the "query"
+// default.
+func (q *QuerySyncConfig) EffectiveQueryParam() string {
+	if q == nil || strings.TrimSpace(q.QueryParam) == "" {
+		return "query"
+	}
+	return q.QueryParam
+}
+
+// EffectivePageSize returns the configured in-query page size or the 1000
+// default (QuickBooks Online's MAXRESULTS hard cap).
+func (q *QuerySyncConfig) EffectivePageSize() int {
+	if q == nil || q.PageSize <= 0 {
+		return 1000
+	}
+	return q.PageSize
 }
 
 // EmbeddedPagedSubresource describes one paged-envelope property nested
@@ -2668,6 +3201,9 @@ func ParseBytes(data []byte) (*APISpec, error) {
 			}
 		}
 	}
+	if err := validateRawSpecStructure(data); err != nil {
+		return nil, err
+	}
 	if yamlErr != nil {
 		return nil, fmt.Errorf("parsing yaml: %w", yamlErr)
 	}
@@ -2686,6 +3222,130 @@ func ParseBytes(data []byte) (*APISpec, error) {
 		return nil, fmt.Errorf("validation: %w", err)
 	}
 	return &s, nil
+}
+
+func validateRawSpecStructure(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil
+	}
+	root := yamlDocumentRoot(&doc)
+	if root == nil || root.Kind != yaml.MappingNode {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var topLevelDuplicates []string
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := root.Content[i].Value
+		if _, ok := seen[key]; ok {
+			topLevelDuplicates = append(topLevelDuplicates, key)
+			continue
+		}
+		seen[key] = struct{}{}
+	}
+	if len(topLevelDuplicates) > 0 {
+		slices.Sort(topLevelDuplicates)
+		topLevelDuplicates = slices.Compact(topLevelDuplicates)
+		return fmt.Errorf("spec structural error: duplicate top-level key(s): %s", strings.Join(topLevelDuplicates, ", "))
+	}
+
+	if auth := mappingValue(root, "auth"); auth != nil {
+		unknown := unknownYAMLFields(auth, reflect.TypeFor[AuthConfig]())
+		if len(unknown) == 1 {
+			return fmt.Errorf("spec structural error: auth contains unknown field %q", unknown[0])
+		}
+		if len(unknown) > 1 {
+			return fmt.Errorf("spec structural error: auth contains unknown fields: %s", strings.Join(unknown, ", "))
+		}
+	}
+
+	types := mappingValue(root, "types")
+	if types == nil || types.Kind != yaml.MappingNode {
+		return nil
+	}
+	var misplaced []string
+	for i := 0; i+1 < len(types.Content); i += 2 {
+		name := types.Content[i].Value
+		value := types.Content[i+1]
+		if value.Kind == yaml.MappingNode && mappingValue(value, "endpoints") != nil {
+			misplaced = append(misplaced, name)
+		}
+	}
+	if len(misplaced) > 0 {
+		slices.Sort(misplaced)
+		return fmt.Errorf("spec structural error: found resource-shaped entr%s under 'types:' (%s) - resources were likely appended at the wrong indentation level; move them under top-level 'resources:'", pluralSuffix(len(misplaced), "y", "ies"), strings.Join(misplaced, ", "))
+	}
+	return nil
+}
+
+func unknownYAMLFields(node *yaml.Node, structType reflect.Type) []string {
+	known := make(map[string]struct{}, structType.NumField())
+	for field := range structType.Fields() {
+		name := strings.Split(field.Tag.Get("yaml"), ",")[0]
+		if name != "" && name != "-" {
+			known[name] = struct{}{}
+		}
+	}
+	var unknown []string
+	collectUnknownYAMLFields(node, known, make(map[*yaml.Node]bool), &unknown)
+	slices.Sort(unknown)
+	return slices.Compact(unknown)
+}
+
+func collectUnknownYAMLFields(node *yaml.Node, known map[string]struct{}, visited map[*yaml.Node]bool, unknown *[]string) {
+	if node == nil || visited[node] {
+		return
+	}
+	visited[node] = true
+
+	switch node.Kind {
+	case yaml.AliasNode:
+		collectUnknownYAMLFields(node.Alias, known, visited, unknown)
+	case yaml.SequenceNode:
+		for _, child := range node.Content {
+			collectUnknownYAMLFields(child, known, visited, unknown)
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			name := node.Content[i].Value
+			if name == "<<" {
+				collectUnknownYAMLFields(node.Content[i+1], known, visited, unknown)
+				continue
+			}
+			if _, ok := known[name]; !ok {
+				*unknown = append(*unknown, name)
+			}
+		}
+	}
+}
+
+func yamlDocumentRoot(doc *yaml.Node) *yaml.Node {
+	if doc == nil {
+		return nil
+	}
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		return doc.Content[0]
+	}
+	return doc
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func pluralSuffix(count int, singular, plural string) string {
+	if count == 1 {
+		return singular
+	}
+	return plural
 }
 
 // ReservedCLIResourceNames is the set of resource names that would collide with
@@ -2782,7 +3442,7 @@ var ReservedCobraUseNames = map[string]struct{}{
 // profiling, so parsers must not reject or rename them before the generator
 // knows the actual root command set.
 func (s *APISpec) ParseTimeReservedCobraUseName(name string) bool {
-	kebab := snakeToKebab(name)
+	kebab := NormalizeCobraCommandName(name)
 	if kebab == "auth" {
 		return s.emitsAuthCommand()
 	}
@@ -2838,10 +3498,7 @@ func (s *APISpec) applyReservedResourceParentPrefixes() {
 
 	renames := map[string]string{}
 	for _, name := range keys {
-		if name == "auth" && !s.emitsAuthCommand() {
-			continue
-		}
-		if _, reserved := ReservedCLIResourceNames[name]; !reserved {
+		if !s.ConflictsWithReservedCLIResourceName(name) {
 			continue
 		}
 		candidate := s.uniqueReservedResourceParentPrefix(name, s.Resources[name], taken)
@@ -2952,16 +3609,23 @@ func (s *APISpec) emitsTopLevelOAuthLogin() bool {
 		(s.Auth.EffectiveOAuth2Grant() != OAuth2GrantClientCredentials || s.Auth.TokenURL == "")
 }
 
+// ConflictsWithReservedCLIResourceName reports whether a top-level resource
+// would collide with an emitted reserved Printing Press template.
+func (s *APISpec) ConflictsWithReservedCLIResourceName(name string) bool {
+	if name == "auth" && s != nil && !s.emitsAuthCommand() {
+		return false
+	}
+	_, reserved := ReservedCLIResourceNames[name]
+	return reserved
+}
+
 // validateReservedNames rejects specs whose top-level resource names would
 // collide with reserved Printing Press templates. Sub-resource names are not
 // checked because they emit under a parent prefix (`<parent>_<sub>.go`,
 // `new<Parent><Sub>Cmd`) that does not collide with single-file templates.
 func (s *APISpec) validateReservedNames() error {
 	for name := range s.Resources {
-		if name == "auth" && !s.emitsAuthCommand() {
-			continue
-		}
-		if _, reserved := ReservedCLIResourceNames[name]; reserved {
+		if s.ConflictsWithReservedCLIResourceName(name) {
 			return fmt.Errorf("resource name %q collides with reserved Printing Press template %q (would overwrite internal/cli/%s.go and produce a duplicate `new%sCmd` function). Rename to %q in your spec",
 				name, name, name, SnakeToPascal(name), name+"_resource")
 		}
@@ -2975,7 +3639,7 @@ func (s *APISpec) validateReservedNames() error {
 // root.
 func (s *APISpec) validateFrameworkCobraCollisions() error {
 	for name := range s.Resources {
-		kebab := snakeToKebab(name)
+		kebab := NormalizeCobraCommandName(name)
 		if s.ParseTimeReservedCobraUseName(kebab) {
 			suggestion := name + "_resource"
 			if s.Name != "" {
@@ -2986,6 +3650,30 @@ func (s *APISpec) validateFrameworkCobraCollisions() error {
 		}
 	}
 	return nil
+}
+
+// NormalizeCobraCommandName mirrors the command name emitted by the generator.
+// Sharing the interface-prefix and word-boundary rules keeps every collision
+// check aligned with the public Cobra surface.
+func NormalizeCobraCommandName(s string) string {
+	if len(s) > 1 && s[0] == 'I' && unicode.IsUpper(rune(s[1])) {
+		s = s[1:]
+	}
+	var result strings.Builder
+	for i, r := range s {
+		if r == '_' {
+			result.WriteByte('-')
+			continue
+		}
+		if unicode.IsUpper(r) && i > 0 {
+			previous := rune(s[i-1])
+			if unicode.IsLower(previous) || (unicode.IsUpper(previous) && i+1 < len(s) && unicode.IsLower(rune(s[i+1]))) {
+				result.WriteByte('-')
+			}
+		}
+		result.WriteRune(unicode.ToLower(r))
+	}
+	return result.String()
 }
 
 func snakeToKebab(s string) string {
@@ -3303,6 +3991,7 @@ var reservedRootFlagNames = map[string]struct{}{
 	"dry-run":               {},
 	"no-cache":              {},
 	"no-input":              {},
+	"insecure":              {},
 	"idempotent":            {},
 	"ignore-missing":        {},
 	"yes":                   {},
@@ -3311,11 +4000,16 @@ var reservedRootFlagNames = map[string]struct{}{
 	"allow-partial-failure": {},
 	"select":                {},
 	"config":                {},
+	"home":                  {},
 	"timeout":               {},
 	"max-age":               {},
 	"data-source":           {},
 	"profile":               {},
+	"client-profile":        {},
 	"deliver":               {},
+	"receipt":               {},
+	"receipt-file":          {},
+	"audit-dir":             {},
 	"rate-limit":            {},
 	"throttle-mode":         {},
 	"no-color":              {},
@@ -3323,32 +4017,47 @@ var reservedRootFlagNames = map[string]struct{}{
 }
 
 var reservedRootFlagFieldNames = map[string]struct{}{
-	"asJSON":              {},
-	"compact":             {},
-	"csv":                 {},
-	"plain":               {},
-	"quiet":               {},
-	"dryRun":              {},
-	"noCache":             {},
-	"noInput":             {},
-	"idempotent":          {},
-	"ignoreMissing":       {},
-	"yes":                 {},
-	"agent":               {},
-	"noLearn":             {},
-	"allowPartialFailure": {},
-	"selectFields":        {},
-	"configPath":          {},
-	"profileName":         {},
-	"deliverSpec":         {},
-	"timeout":             {},
-	"rateLimit":           {},
-	"maxAge":              {},
-	"dataSource":          {},
-	"freshnessMeta":       {},
-	"throttleMode":        {},
-	"deliverBuf":          {},
-	"deliverSink":         {},
+	"asJSON":                  {},
+	"compact":                 {},
+	"csv":                     {},
+	"plain":                   {},
+	"quiet":                   {},
+	"dryRun":                  {},
+	"noCache":                 {},
+	"noInput":                 {},
+	"insecure":                {},
+	"idempotent":              {},
+	"ignoreMissing":           {},
+	"yes":                     {},
+	"agent":                   {},
+	"noLearn":                 {},
+	"allowPartialFailure":     {},
+	"selectFields":            {},
+	"configPath":              {},
+	"homePath":                {},
+	"profileName":             {},
+	"runProfileName":          {},
+	"clientProfileName":       {},
+	"platformGateError":       {},
+	"platformSession":         {},
+	"platformResolver":        {},
+	"platformResolverReady":   {},
+	"platformAnalytics":       {},
+	"platformMetadataWriter":  {},
+	"platformMetadataEmitted": {},
+	"receiptEnabled":          {},
+	"receiptFile":             {},
+	"auditDir":                {},
+	"receiptWriter":           {},
+	"deliverSpec":             {},
+	"timeout":                 {},
+	"rateLimit":               {},
+	"maxAge":                  {},
+	"dataSource":              {},
+	"freshnessMeta":           {},
+	"throttleMode":            {},
+	"deliverBuf":              {},
+	"deliverSink":             {},
 }
 
 // PathContainsPlaceholder reports whether path contains the literal
@@ -3474,7 +4183,7 @@ func promoteEndpointParamsToBody(e *Endpoint) {
 	keep := make([]Param, 0, len(e.Params))
 	promote := make([]Param, 0, len(e.Params))
 	for _, p := range e.Params {
-		if p.PathParam || p.Positional {
+		if p.PathParam || p.Positional || strings.EqualFold(p.In, "query") || strings.EqualFold(p.In, "header") {
 			keep = append(keep, p)
 			continue
 		}
@@ -3599,6 +4308,8 @@ func singularize(s string) string {
 
 func (s *APISpec) Validate() error {
 	s.NormalizeAuthEnvVarSpecs()
+	s.NormalizeCookieDomain()
+	s.ResponseEnvelopeKey = strings.TrimSpace(s.ResponseEnvelopeKey)
 	s.InferEndpointTemplateVarsFromBaseURLs()
 	if s.Name == "" {
 		return fmt.Errorf("name is required")
@@ -3638,6 +4349,11 @@ func (s *APISpec) Validate() error {
 	default:
 		return fmt.Errorf("rate_class must be one of: per-second, daily, monthly, unlimited")
 	}
+	if v := strings.TrimSpace(s.DefaultRateLimit); v != "" && !strings.EqualFold(v, "auto") {
+		if f, err := strconv.ParseFloat(v, 64); err != nil || f < 0 {
+			return fmt.Errorf("default_rate_limit must be \"auto\" or a non-negative number")
+		}
+	}
 	if err := validateExtraCommands(s.ExtraCommands); err != nil {
 		return err
 	}
@@ -3656,6 +4372,9 @@ func (s *APISpec) Validate() error {
 	if err := validateStreaming(s.Streaming); err != nil {
 		return err
 	}
+	if err := validateQuerySync(s.QuerySync); err != nil {
+		return err
+	}
 	if err := validateBearerRefresh(s); err != nil {
 		return err
 	}
@@ -3669,6 +4388,9 @@ func (s *APISpec) Validate() error {
 		return err
 	}
 	if err := validateAuthSubtype(s.Auth); err != nil {
+		return err
+	}
+	if err := validateAuthConfig("auth", s.Auth); err != nil {
 		return err
 	}
 	if err := validateSessionHandshake(s.Auth); err != nil {
@@ -3694,6 +4416,9 @@ func (s *APISpec) Validate() error {
 	}
 	if s.ClientPattern == "proxy-envelope" && s.BasePath != "" {
 		return fmt.Errorf("base_path is incompatible with client_pattern=proxy-envelope; the proxy routes via the envelope's Service/Path fields, not a URL-level prefix — fold the prefix into base_url instead")
+	}
+	if s.ClientPattern == "proxy-envelope" && s.HasRawRequest() {
+		return fmt.Errorf("raw request bodies are incompatible with client_pattern=proxy-envelope; the proxy protocol serializes request bodies as JSON and cannot preserve an opaque content stream")
 	}
 	for name, r := range s.Resources {
 		if len(r.Endpoints) == 0 && len(r.SubResources) == 0 {
@@ -3856,6 +4581,55 @@ func (s *APISpec) NormalizeAuthEnvVarSpecs() {
 		tier.Auth.NormalizeEnvVarSpecs(fmt.Sprintf("tier_routing.tiers.%s.auth", name))
 		s.TierRouting.Tiers[name] = tier
 	}
+}
+
+// NormalizeCookieDomain backfills Auth.CookieDomain for browser-session auth
+// when no explicit domain came from the spec field, the x-auth-cookie-domain
+// extension, or the sniffer's bound domain. The browser cookie-capture path
+// (`auth login --chrome`) reads cookies scoped to this domain; an empty value
+// makes it request cookies for "" so the extraction tool returns none. Derive
+// a leading-dot domain from base_url so cookies on the registrable domain and
+// its subdomains both match.
+func (s *APISpec) NormalizeCookieDomain() {
+	if s == nil || s.Auth.CookieDomain != "" {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(s.Auth.Type)) {
+	case "cookie", "composed", "session_handshake":
+	default:
+		return
+	}
+	if domain := cookieDomainFromBaseURL(s.BaseURL); domain != "" {
+		s.Auth.CookieDomain = domain
+	}
+}
+
+// cookieDomainFromBaseURL returns a leading-dot cookie domain for a base URL,
+// stripping a leading "www." so the registrable domain and its subdomains both
+// match (e.g. "https://www.example.com" -> ".example.com"). Returns "" when no
+// host can be recovered.
+func cookieDomainFromBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	// url.Parse treats a scheme-less string as a relative path (empty Host),
+	// so a base_url like "api.example.com" would otherwise yield no domain.
+	// Prepend a scheme to recover the host in that case.
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	// Guard degenerate hosts: a bare "www." trims to "" (would emit "..").
+	bare := strings.TrimPrefix(host, "www.")
+	if bare == "" || bare == "." {
+		return ""
+	}
+	return "." + bare
 }
 
 var publicParamNameRe = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
@@ -4356,25 +5130,25 @@ func validateTierRoutingResource(s *APISpec, resourcePath string, resource Resou
 
 func validateEndpointResponseFormat(e Endpoint) error {
 	switch e.ResponseFormat {
-	case "", ResponseFormatJSON, ResponseFormatCSV, ResponseFormatHTML, ResponseFormatBinary:
+	case "", ResponseFormatJSON, ResponseFormatCSV, ResponseFormatHTML, ResponseFormatXML, ResponseFormatBinary, ResponseFormatText:
 	default:
-		return fmt.Errorf("response_format must be one of: json, csv, html, binary")
+		return fmt.Errorf("response_format must be one of: json, csv, html, xml, binary, text")
 	}
 	if !e.UsesHTMLResponse() {
 		return nil
 	}
 	switch strings.ToUpper(strings.TrimSpace(e.Method)) {
-	case "GET", "HEAD":
+	case "GET", "HEAD", "POST":
 	default:
-		return fmt.Errorf("html response_format is only supported for GET/HEAD endpoints")
+		return fmt.Errorf("html response_format is only supported for GET/HEAD/POST endpoints")
 	}
 	if e.HTMLExtract == nil {
 		return nil
 	}
 	switch e.HTMLExtract.Mode {
-	case "", HTMLExtractModePage, HTMLExtractModeLinks, HTMLExtractModeEmbeddedJSON:
+	case "", HTMLExtractModePage, HTMLExtractModeLinks, HTMLExtractModeTable, HTMLExtractModeEmbeddedJSON:
 	default:
-		return fmt.Errorf("html_extract.mode must be one of: page, links, embedded-json")
+		return fmt.Errorf("html_extract.mode must be one of: page, links, table, embedded-json")
 	}
 	if e.HTMLExtract.Limit < 0 {
 		return fmt.Errorf("html_extract.limit must be >= 0")
@@ -4626,15 +5400,26 @@ func validateCacheShare(cache CacheConfig, share ShareConfig, resources map[stri
 // time rather than as a silent lookup miss at recall time.
 var learnSeedKindRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// validateLearn enforces the LearnConfig shape contract: ticker patterns
-// must compile as Go regexps, seed kinds must be SQLite-safe identifiers,
-// each seed must carry a non-empty Canonical, and canonical values must be
-// unique within a kind. Stopword sanitization (dropping whitespace-only
-// entries) happens here too so the spec's parsed view matches what the
-// generated CLI will actually load at runtime.
+// validateLearn enforces the LearnConfig shape contract: the enabled and
+// disabled switches must not contradict, synonym pairs must be single-hop
+// lowercase folds, ticker patterns must compile as Go regexps, seed kinds
+// must be SQLite-safe identifiers, each seed must carry a non-empty
+// Canonical, and canonical values must be unique within a kind. Stopword
+// sanitization (dropping whitespace-only entries) happens here too so the
+// spec's parsed view matches what the generated CLI will actually load at
+// runtime.
 func validateLearn(learn *LearnConfig) error {
 	if learn == nil {
 		return nil
+	}
+	// Both switches set at once is a contradiction, not a precedence
+	// question: silently picking a winner would make the losing field a
+	// lie in the published spec, so the author must resolve it.
+	if learn.Disabled && learn.Enabled {
+		return fmt.Errorf("learn.disabled: true contradicts learn.enabled: true; remove one (disabled is the generation-time opt-out)")
+	}
+	if err := validateLearnSynonyms(learn.Synonyms); err != nil {
+		return err
 	}
 	for i, pattern := range learn.TickerPatterns {
 		if _, err := regexp.Compile(pattern); err != nil {
@@ -4654,7 +5439,40 @@ func validateLearn(learn *LearnConfig) error {
 		}
 		learn.Stopwords = filtered
 	}
-	for kind, seeds := range learn.EntityLookupSeeds {
+	if err := validateLearnSeeds(learn.EntityLookupSeeds); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateLearnSynonyms enforces the same-referent fold contract on
+// LearnConfig.Synonyms: pairs of non-empty lowercase strings, no
+// self-references, and no chains. Folding must be a single hop applied
+// symmetrically at write and read; a value that is itself a key would make
+// the fold result depend on application order, so chains are rejected
+// outright rather than flattened.
+func validateLearnSynonyms(synonyms map[string]string) error {
+	for variant, canonical := range synonyms {
+		if strings.TrimSpace(variant) == "" || strings.TrimSpace(canonical) == "" {
+			return fmt.Errorf("learn.synonyms: both variant and canonical must be non-empty (got %q -> %q)", variant, canonical)
+		}
+		if variant != strings.ToLower(variant) || canonical != strings.ToLower(canonical) {
+			return fmt.Errorf("learn.synonyms: %q -> %q must be lowercase; query normalization lowercases before folding", variant, canonical)
+		}
+		if variant == canonical {
+			return fmt.Errorf("learn.synonyms: %q maps to itself; a fold must change the phrasing", variant)
+		}
+		if _, isKey := synonyms[canonical]; isKey {
+			return fmt.Errorf("learn.synonyms: %q -> %q forms a chain (%q is also a variant key); map every variant directly to its canonical form", variant, canonical, canonical)
+		}
+	}
+	return nil
+}
+
+// validateLearnSeeds enforces the EntityLookupSeeds contract: SQLite-safe
+// kind names, non-empty canonicals, and canonical uniqueness within a kind.
+func validateLearnSeeds(seedsByKind map[string][]LookupSeed) error {
+	for kind, seeds := range seedsByKind {
 		if !learnSeedKindRe.MatchString(kind) {
 			return fmt.Errorf("learn.entity_lookup_seeds: kind %q must be lowercase letters, digits, and underscore only (no whitespace or punctuation other than _)", kind)
 		}
@@ -4789,6 +5607,19 @@ func (s *APISpec) ApplyLargeMCPSurfaceDefault() LargeMCPSurfaceDefaultResult {
 	return result
 }
 
+// ApplyLearnLoopDefault applies the learn-loop default in place: a spec that
+// neither opts out nor already opts in gets
+// learn.enabled=true, with one info line to w naming the opt-out. Explicit
+// states short-circuit silently: learn.disabled and legacy learn.enabled=false
+// are off switches, and an already-enabled spec keeps its config untouched.
+func (s *APISpec) ApplyLearnLoopDefault(w io.Writer) {
+	if s == nil || s.Learn.Disabled || s.Learn.Enabled || s.Learn.EnabledSet {
+		return
+	}
+	s.Learn.Enabled = true
+	fmt.Fprintf(w, "info: learn: defaulting self-learning loop on (opt out with learn.disabled: true)\n")
+}
+
 // IsCodeOrchestration reports whether this MCP config opts into the
 // code-orchestration thin surface. Templates branch on this to emit only
 // <api>_search + <api>_execute instead of the endpoint-mirror.
@@ -4901,6 +5732,9 @@ func validateIntents(intents []Intent, resources map[string]Resource) error {
 		for pi, p := range intent.Params {
 			if p.Name == "" {
 				return fmt.Errorf("mcp.intents[%d] (%s): params[%d].name is required", i, intent.Name, pi)
+			}
+			if !MCPPropertyKeyRe.MatchString(p.Name) {
+				return fmt.Errorf("mcp.intents[%d] (%s): param name %q must match %s (1-64 chars): it is emitted as an MCP tool property key, and an illegal key bricks the calling agent session", i, intent.Name, p.Name, MCPPropertyKeyPattern)
 			}
 			if _, ok := allowedIntentParamTypes[p.Type]; !ok {
 				return fmt.Errorf("mcp.intents[%d] (%s): params[%d] (%s): type %q must be one of string, integer, boolean", i, intent.Name, pi, p.Name, p.Type)

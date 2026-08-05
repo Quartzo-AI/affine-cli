@@ -1,8 +1,16 @@
 {
   "api_name": "printing-press-golden",
   "api_version": "2026.04",
+  "auth_env_var_specs": [
+    {
+      "kind": "per_call",
+      "name": "PRINTING_PRESS_CLIENT_PROFILE",
+      "required": true,
+      "sensitive": false
+    }
+  ],
   "auth_env_vars": [
-    "PRINTING_PRESS_GOLDEN_API_KEY"
+    "PRINTING_PRESS_CLIENT_PROFILE"
   ],
   "auth_preference": "ApiKeyAuth",
   "auth_type": "api_key",
@@ -23,7 +31,7 @@
   "printer_name": "printing-press-golden",
   "printing_press_version": "<PRINTING_PRESS_VERSION>",
   "run_id": "<RUN_ID>",
-  "schema_version": 1,
+  "schema_version": 2,
   "spec_checksum": "sha256:eee1bdd3ef6e6cd2fec50d851db4f213c9ca9d314fad88e3b544718383f3b4d8",
   "spec_format": "openapi3",
   "spec_path": "golden-api.yaml",

@@ -10,9 +10,6 @@ import (
 	"regexp"
 	"strings"
 
-	catalogfs "github.com/mvanhorn/cli-printing-press/v4/catalog"
-	"github.com/mvanhorn/cli-printing-press/v4/internal/catalog"
-	"github.com/mvanhorn/cli-printing-press/v4/internal/catalogmeta"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/generator"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/graphql"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/mcpoverrides"
@@ -20,6 +17,7 @@ import (
 	"github.com/mvanhorn/cli-printing-press/v4/internal/openapi"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/pipeline"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/spec"
+	"github.com/mvanhorn/cli-printing-press/v4/internal/specmeta"
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/semver"
 )
@@ -53,6 +51,108 @@ type Options struct {
 	Force bool
 }
 
+type mcpClientSurfaceRequirement struct {
+	name   string
+	marker string
+}
+
+// Keep this contract in lockstep with client APIs referenced by mcp_tools.go.tmpl.
+var mcpClientSurfaceRequirements = []mcpClientSurfaceRequirement{
+	{"BinaryResponseHeader", "const BinaryResponseHeader"},
+	{"New(config, timeout, rateLimit)", "func New(cfg *config.Config, timeout time.Duration, rateLimit float64) *Client"},
+	{"Client.Config", "field:Config:*config.Config"},
+	{"Client.NoCache", "field:NoCache:bool"},
+	{"Get(context.Context, ...)", "func (c *Client) Get(ctx context.Context,"},
+	{"GetWithHeaders(context.Context, ...)", "func (c *Client) GetWithHeaders(ctx context.Context,"},
+	{"PostWithParams(context.Context, ...)", "func (c *Client) PostWithParams(ctx context.Context,"},
+	{"PostWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PostWithParamsAndHeaders(ctx context.Context,"},
+	{"PostQueryWithParams(context.Context, ...)", "func (c *Client) PostQueryWithParams(ctx context.Context,"},
+	{"PostQueryWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PostQueryWithParamsAndHeaders(ctx context.Context,"},
+	{"DeleteWithParams(context.Context, ...)", "func (c *Client) DeleteWithParams(ctx context.Context,"},
+	{"DeleteWithParamsAndHeaders(context.Context, ...)", "func (c *Client) DeleteWithParamsAndHeaders(ctx context.Context,"},
+	{"PutWithParams(context.Context, ...)", "func (c *Client) PutWithParams(ctx context.Context,"},
+	{"PutWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PutWithParamsAndHeaders(ctx context.Context,"},
+	{"PatchWithParams(context.Context, ...)", "func (c *Client) PatchWithParams(ctx context.Context,"},
+	{"PatchWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PatchWithParamsAndHeaders(ctx context.Context,"},
+}
+
+var conditionalMCPClientSurfaceRequirements = []struct {
+	featureMarker string
+	requirements  []mcpClientSurfaceRequirement
+}{
+	{
+		featureMarker: "func (c *Client) PostForm(",
+		requirements: []mcpClientSurfaceRequirement{
+			{"PostFormWithParams(context.Context, ...)", "func (c *Client) PostFormWithParams(ctx context.Context,"},
+			{"PostFormWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PostFormWithParamsAndHeaders(ctx context.Context,"},
+			{"PostQueryFormWithParams(context.Context, ...)", "func (c *Client) PostQueryFormWithParams(ctx context.Context,"},
+			{"PostQueryFormWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PostQueryFormWithParamsAndHeaders(ctx context.Context,"},
+			{"PutFormWithParams(context.Context, ...)", "func (c *Client) PutFormWithParams(ctx context.Context,"},
+			{"PutFormWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PutFormWithParamsAndHeaders(ctx context.Context,"},
+			{"PatchFormWithParams(context.Context, ...)", "func (c *Client) PatchFormWithParams(ctx context.Context,"},
+			{"PatchFormWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PatchFormWithParamsAndHeaders(ctx context.Context,"},
+		},
+	},
+	{
+		featureMarker: "func (c *Client) PostMultipart(",
+		requirements: []mcpClientSurfaceRequirement{
+			{"PostMultipartWithParams(context.Context, ...)", "func (c *Client) PostMultipartWithParams(ctx context.Context,"},
+			{"PostMultipartWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PostMultipartWithParamsAndHeaders(ctx context.Context,"},
+			{"PutMultipartWithParams(context.Context, ...)", "func (c *Client) PutMultipartWithParams(ctx context.Context,"},
+			{"PutMultipartWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PutMultipartWithParamsAndHeaders(ctx context.Context,"},
+			{"PatchMultipartWithParams(context.Context, ...)", "func (c *Client) PatchMultipartWithParams(ctx context.Context,"},
+			{"PatchMultipartWithParamsAndHeaders(context.Context, ...)", "func (c *Client) PatchMultipartWithParamsAndHeaders(ctx context.Context,"},
+		},
+	},
+	{
+		featureMarker: "requestTier string",
+		requirements: []mcpClientSurfaceRequirement{
+			{"WithTier(string)", "func (c *Client) WithTier(tier string) *Client"},
+		},
+	},
+}
+
+func ensureMCPClientSurfaceCompatible(cliDir string) error {
+	clientPath := filepath.Join(cliDir, "internal", "client", "client.go")
+	data, err := os.ReadFile(clientPath)
+	if err != nil {
+		return fmt.Errorf("mcp-sync refused: reading target CLI client API: %w; reprint required before regenerating the MCP surface", err)
+	}
+	src := string(data)
+	var missing []string
+	for _, requirement := range mcpClientSurfaceRequirements {
+		if !mcpClientSurfaceMarkerPresent(src, requirement.marker) {
+			missing = append(missing, requirement.name)
+		}
+	}
+	for _, conditional := range conditionalMCPClientSurfaceRequirements {
+		if !strings.Contains(src, conditional.featureMarker) {
+			continue
+		}
+		for _, requirement := range conditional.requirements {
+			if !mcpClientSurfaceMarkerPresent(src, requirement.marker) {
+				missing = append(missing, requirement.name)
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("mcp-sync refused: target CLI client API is incompatible with the current MCP handler (missing %s); reprint required before regenerating tools.go", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func mcpClientSurfaceMarkerPresent(src, marker string) bool {
+	if !strings.HasPrefix(marker, "field:") {
+		return strings.Contains(src, marker)
+	}
+	parts := strings.Split(marker, ":")
+	if len(parts) != 3 {
+		return false
+	}
+	pattern := `(?m)^\s*` + regexp.QuoteMeta(parts[1]) + `\s+` + regexp.QuoteMeta(parts[2]) + `\s*$`
+	return regexp.MustCompile(pattern).MatchString(src)
+}
+
 func Sync(cliDir string, opts Options) (Result, error) {
 	state, err := pipeline.InspectMCPSurface(cliDir)
 	if err != nil {
@@ -60,6 +160,9 @@ func Sync(cliDir string, opts Options) (Result, error) {
 	}
 	if state.State == pipeline.MCPSurfaceHandEdited && !opts.Force {
 		return Result{}, fmt.Errorf("%w: tools.go appears hand-edited; refusing to overwrite. Use --force to override at your own risk", ErrHandEdited)
+	}
+	if err := ensureMCPClientSurfaceCompatible(cliDir); err != nil {
+		return Result{}, err
 	}
 	// MCPSurfaceRuntime means the MCP source is already on the new walker
 	// template and we don't need to migrate that. But we still refresh
@@ -84,7 +187,6 @@ func Sync(cliDir string, opts Options) (Result, error) {
 	if prior != "" {
 		fmt.Fprintf(os.Stderr, "mcp-sync: using manifest api_name %q over spec-derived slug %q\n", parsed.Name, prior)
 	}
-	applyCatalogMetadata(parsed)
 	// Validate that spec.yaml.name matches the directory's basename.
 	// Older library CLIs sometimes have drift (weather-goat's
 	// spec.yaml.name = "weather"; open-meteo's name diverges similarly)
@@ -119,7 +221,7 @@ func Sync(cliDir string, opts Options) (Result, error) {
 	// Falls through to the public library's registry.json when
 	// manifest.json has no usable value (browser-sniffed CLIs that
 	// never had a manifest, or a manifest already corrupted to the
-	// slug form). The registry is the catalog source of truth for
+	// slug form). The public-library registry is the source of truth for
 	// brand names.
 	if parsed.DisplayName == "" {
 		if existing := readExistingManifestDisplayName(cliDir); existing != "" {
@@ -530,20 +632,9 @@ func applyManifestNameOverride(cliDir string, parsed *spec.APISpec) (prior strin
 	if parsed.Config.Path == fmt.Sprintf(defaultConfigPathFormat, naming.CLI(prior)) {
 		parsed.Config.Path = fmt.Sprintf(defaultConfigPathFormat, naming.CLI(apiName))
 	}
-	catalogmeta.RebaseAuthEnvPrefix(&parsed.Auth, prior, apiName)
+	specmeta.RebaseAuthEnvPrefix(&parsed.Auth, prior, apiName)
 	parsed.Name = apiName
 	return prior, true
-}
-
-func applyCatalogMetadata(parsed *spec.APISpec) {
-	if parsed == nil {
-		return
-	}
-	entry, err := catalog.LookupFS(catalogfs.FS, parsed.Name)
-	if err != nil {
-		return
-	}
-	catalogmeta.ApplyRuntimeMetadata(parsed, entry)
 }
 
 // readExistingManifestDisplayName returns the display_name from an

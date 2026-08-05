@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -86,11 +87,6 @@ type FreshnessResult struct {
 
 // RunVerify executes the runtime verification pipeline.
 func RunVerify(cfg VerifyConfig) (*VerifyReport, error) {
-	releaseHome, err := scopeSubprocessHome()
-	if err != nil {
-		return nil, err
-	}
-	defer releaseHome()
 	// Keep this boundary safe for programmatic callers; CLI commands also
 	// normalize earlier when they need the stable path for follow-on argv.
 	absDir, err := filepath.Abs(cfg.Dir)
@@ -98,6 +94,11 @@ func RunVerify(cfg VerifyConfig) (*VerifyReport, error) {
 		return nil, fmt.Errorf("resolving CLI directory: %w", err)
 	}
 	cfg.Dir = absDir
+	releaseHome, err := scopeSubprocessHome(findCLINames(cfg.Dir)...)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseHome()
 	if cfg.NoSpec {
 		return runStructuralVerify(cfg)
 	}
@@ -131,6 +132,7 @@ func RunVerify(cfg VerifyConfig) (*VerifyReport, error) {
 	} else {
 		report.Mode = "mock"
 	}
+	report.Results = append(report.Results, runResourcePathContractChecks(cfg.Dir)...)
 
 	// 3. Build the generated CLI binary
 	binaryPath, err := buildCLI(cfg.Dir)
@@ -456,9 +458,7 @@ func runSideEffectSafeCommandTests(binary string, cmd discoveredCommand, env []s
 
 	positionals, flags := sideEffectSafeInvocationInputs(cmd)
 
-	dryArgs := append([]string{cmd.Name}, positionals...)
-	dryArgs = append(dryArgs, flags...)
-	dryArgs = append(dryArgs, "--dry-run")
+	dryArgs := buildRuntimeTestArgs(cmd.Name, positionals, flags, "--dry-run")
 	if err := runCLI(binary, dryArgs, env, 10*time.Second); err == nil || isIntentionalStubExit(err) {
 		result.DryRun = true
 	}
@@ -504,11 +504,7 @@ func runCommandTests(binary string, cmd discoveredCommand, mode string, env []st
 
 	// Build positional args + flags for test invocations
 	buildTestArgs := func(cmdName string, positionalArgs, flags []string, extra ...string) []string {
-		args := []string{cmdName}
-		args = append(args, positionalArgs...)
-		args = append(args, flags...)
-		args = append(args, extra...)
-		return args
+		return buildRuntimeTestArgs(cmdName, positionalArgs, flags, extra...)
 	}
 
 	// Test 2: --dry-run (skip for local/data-layer commands that don't make API calls)
@@ -526,7 +522,11 @@ func runCommandTests(binary string, cmd discoveredCommand, mode string, env []st
 	} else if mode == "live" && cmd.Kind == "write" {
 		result.Execute = true // skip writes on live = pass (tested via dry-run)
 	} else {
-		args := buildTestArgs(cmd.Name, positionals, extraFlags, "--json")
+		extra := []string{"--json"}
+		if hasExplicitOutputMode(extraFlags) {
+			extra = nil
+		}
+		args := buildTestArgs(cmd.Name, positionals, extraFlags, extra...)
 		err := runCLI(binary, args, env, 15*time.Second)
 		result.Execute = err == nil || isIntentionalStubExit(err) || isDocumentedSuccessExit(err, typedCodes)
 	}
@@ -545,6 +545,20 @@ func runCommandTests(binary string, cmd discoveredCommand, mode string, env []st
 	result.Score = score
 
 	return result
+}
+
+func buildRuntimeTestArgs(cmdName string, positionalArgs, flags []string, extra ...string) []string {
+	args := []string{cmdName}
+	if slices.ContainsFunc(positionalArgs, isNegativeNumericArg) {
+		args = appendRuntimeFlagArgs(args, flags)
+		args = append(args, extra...)
+		args = append(args, "--")
+		return append(args, positionalArgs...)
+	}
+	args = append(args, positionalArgs...)
+	args = appendRuntimeFlagArgs(args, flags)
+	args = append(args, extra...)
+	return args
 }
 
 func isIntentionalStubExit(err error) bool {
@@ -618,6 +632,12 @@ func runDataPipelineTest(binary, cliDir, mode string, envFn func() []string, exp
 		if !cliHasSyncCommand(cliDir) {
 			return true, "SKIP (CLI has no sync command)"
 		}
+		if !cliHasLocalStore(cliDir) {
+			return true, "SKIP (CLI has no local store)"
+		}
+		if mode == "mock" && cliIsGraphQLCLIDir(cliDir) {
+			return true, "SKIP (GraphQL CLI: mock server cannot synthesize sync data)"
+		}
 	}
 
 	env := envFn()
@@ -641,13 +661,27 @@ func runDataPipelineTest(binary, cliDir, mode string, envFn func() []string, exp
 	}
 	if syncErr != nil {
 		syncErrors = append(syncErrors, syncErr)
-		// Sync might not accept --db flag - try without.
+		// Sync might not accept --resources or --full; keep --db when
+		// possible so downstream sql probes read the same temporary store.
+		syncErr = runCLI(binary, []string{"sync", "--db", dbPath}, env, 30*time.Second)
+	}
+	if syncErr != nil {
+		syncErrors = append(syncErrors, syncErr)
+		// Sync might not accept --db either; try the bare command before
+		// deciding the pipeline crashed.
 		syncErr = runCLI(binary, []string{"sync", "--full"}, env, 30*time.Second)
+	}
+	if syncErr != nil {
+		syncErrors = append(syncErrors, syncErr)
+		syncErr = runCLI(binary, []string{"sync"}, env, 30*time.Second)
 	}
 	if syncErr != nil {
 		syncErrors = append(syncErrors, syncErr)
 		if allSyncAttemptsWereUnknownCommand(syncErrors) {
 			return true, "WARN: no sync command — data-pipeline check skipped"
+		}
+		if flag, ok := firstUnknownSyncFlag(syncErrors); ok {
+			return false, fmt.Sprintf("FAIL: sync rejected flag %s", flag)
 		}
 		return false, "FAIL: sync crashed"
 	}
@@ -667,6 +701,9 @@ func runDataPipelineTest(binary, cliDir, mode string, envFn func() []string, exp
 		// No domain tables found — ambiguous (could be minimal CLI or unusual naming).
 		// Don't fail the pipeline gate; report for human review.
 		return true, "WARN: sync completed but no domain tables found in sqlite_master"
+	}
+	if mode == "mock" && strings.TrimSpace(cliDir) != "" && !cliHasSyncableResources(cliDir) {
+		return true, fmt.Sprintf("PASS: %d domain tables created (mock mode; no syncable resources declared)", len(tables))
 	}
 
 	var bestShortTable string
@@ -726,13 +763,53 @@ func allSyncAttemptsWereUnknownCommand(errs []error) bool {
 	return true
 }
 
+func cliIsGraphQLCLIDir(dir string) bool {
+	return fileExists(filepath.Join(dir, "internal", "client", "graphql.go"))
+}
+
 func isUnknownSyncCommandError(err error) bool {
 	text := strings.ToLower(err.Error())
 	return strings.Contains(text, "unknown command \"sync\"")
 }
 
+func firstUnknownSyncFlag(errs []error) (string, bool) {
+	for _, err := range errs {
+		if flag, ok := unknownSyncFlag(err); ok {
+			return flag, true
+		}
+	}
+	return "", false
+}
+
+func unknownSyncFlag(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{"unknown flag: ", "unknown shorthand flag: "} {
+		if _, after, ok := strings.Cut(text, marker); ok {
+			flag := strings.Fields(after)
+			if len(flag) > 0 {
+				return flag[0], true
+			}
+			return "", false
+		}
+	}
+	return "", false
+}
+
 func cliHasSyncCommand(cliDir string) bool {
 	return hasRegisteredCommandFileWithPrefix(filepath.Join(cliDir, "internal", "cli"), "sync")
+}
+
+func cliHasLocalStore(cliDir string) bool {
+	return fileExists(filepath.Join(cliDir, "internal", "store", "store.go"))
+}
+
+func cliHasSyncableResources(cliDir string) bool {
+	content := readAllGoFiles(filepath.Join(cliDir, "internal", "cli"))
+	content += readAllGoFiles(filepath.Join(cliDir, "internal", "store"))
+	return hasNonEmptySyncResources(content)
 }
 
 func isAuxiliaryPipelineTable(table string, totalTables int) bool {
