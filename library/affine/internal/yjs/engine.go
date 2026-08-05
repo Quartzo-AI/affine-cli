@@ -20,12 +20,25 @@ type Engine struct {
 	mu sync.Mutex
 }
 
+// setGlobals binds script inputs into the VM before a script reads them.
+// A failed bind must abort the caller: the previous call's value would still be
+// in place, so the script would run against a stale doc handle or block id and
+// silently mutate the wrong document.
+func (e *Engine) setGlobals(vals map[string]any) error {
+	for name, v := range vals {
+		if err := e.vm.Set(name, v); err != nil {
+			return fmt.Errorf("bind %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // NewEngine creates a new Y.js engine with the bundled library loaded.
 func NewEngine() (*Engine, error) {
 	vm := goja.New()
 
 	// Provide browser API shims that goja doesn't have
-	vm.RunString(`
+	if _, err := vm.RunString(`
 		var console = {
 			log: function() {},
 			warn: function() {},
@@ -70,7 +83,9 @@ func NewEngine() (*Engine, error) {
 			}
 			return out;
 		}
-	`)
+	`); err != nil {
+		return nil, fmt.Errorf("install browser shims: %w", err)
+	}
 
 	// Load Y.js bundle
 	_, err := vm.RunString(yjsBundle)
@@ -79,7 +94,9 @@ func NewEngine() (*Engine, error) {
 	}
 
 	// Initialize docs array and inline markdown parser
-	vm.RunString(`globalThis._docs = [];`)
+	if _, err := vm.RunString(`globalThis._docs = [];`); err != nil {
+		return nil, fmt.Errorf("init docs registry: %w", err)
+	}
 
 	// Register inline markdown parser: converts **bold**, *italic*, ` +"`code`" + `, ~~strike~~, [text](url)
 	// into segments with Y.Text-compatible attributes
@@ -213,7 +230,9 @@ func (e *Engine) ApplyBase64Update(b64 string) (int, error) {
 		return 0, fmt.Errorf("decode base64: %w", err)
 	}
 
-	e.vm.Set("_updateBytes", raw)
+	if err := e.setGlobals(map[string]any{"_updateBytes": raw}); err != nil {
+		return 0, err
+	}
 	val, err := e.vm.RunString(`
 		(function() {
 			var doc = new Y.Doc();
@@ -235,7 +254,9 @@ func (e *Engine) ReadBlocks(docID int) (map[string]map[string]any, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.vm.Set("_docId", docID)
+	if err := e.setGlobals(map[string]any{"_docId": docID}); err != nil {
+		return nil, err
+	}
 	val, err := e.vm.RunString(`
 		(function() {
 			var doc = globalThis._docs[_docId];
@@ -288,7 +309,9 @@ func (e *Engine) ReadMeta(docID int) (map[string]any, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.vm.Set("_docId", docID)
+	if err := e.setGlobals(map[string]any{"_docId": docID}); err != nil {
+		return nil, err
+	}
 	val, err := e.vm.RunString(`
 		(function() {
 			var doc = globalThis._docs[_docId];
@@ -341,7 +364,9 @@ func (e *Engine) EncodeStateAsUpdate(docID int) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.vm.Set("_docId", docID)
+	if err := e.setGlobals(map[string]any{"_docId": docID}); err != nil {
+		return "", err
+	}
 	val, err := e.vm.RunString(`
 		(function() {
 			var doc = globalThis._docs[_docId];
@@ -364,7 +389,9 @@ func (e *Engine) SaveStateVector(docID int) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.vm.Set("_docId", docID)
+	if err := e.setGlobals(map[string]any{"_docId": docID}); err != nil {
+		return "", err
+	}
 	val, err := e.vm.RunString(`
 		(function() {
 			var doc = globalThis._docs[_docId];
@@ -387,8 +414,9 @@ func (e *Engine) EncodeDelta(docID int, stateVectorB64 string) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.vm.Set("_docId", docID)
-	e.vm.Set("_svB64", stateVectorB64)
+	if err := e.setGlobals(map[string]any{"_docId": docID, "_svB64": stateVectorB64}); err != nil {
+		return "", err
+	}
 	val, err := e.vm.RunString(`
 		(function() {
 			var doc = globalThis._docs[_docId];
@@ -416,9 +444,9 @@ func (e *Engine) InsertFormattedText(docID int, blockID, key, markdown string) (
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.vm.Set("_docId", docID)
-	e.vm.Set("_blockId", blockID)
-	e.vm.Set("_key", key)
+	if err := e.setGlobals(map[string]any{"_docId": docID, "_blockId": blockID, "_key": key}); err != nil {
+		return "", err
+	}
 	val, err := e.vm.RunString(fmt.Sprintf(`
 		(function() {
 			var _markdown = %s;
@@ -450,10 +478,9 @@ func (e *Engine) CreateFormattedBlock(docID int, blockID, flavour, blockType, ma
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.vm.Set("_docId", docID)
-	e.vm.Set("_blockId", blockID)
-	e.vm.Set("_flavour", flavour)
-	e.vm.Set("_blockType", blockType)
+	if err := e.setGlobals(map[string]any{"_docId": docID, "_blockId": blockID, "_flavour": flavour, "_blockType": blockType}); err != nil {
+		return err
+	}
 	_, err := e.vm.RunString(fmt.Sprintf(`
 		(function() {
 			var _markdown = %s;
@@ -500,9 +527,14 @@ func (e *Engine) RunScript(script string) (string, error) {
 }
 
 // FreeDoc removes a doc reference to allow GC.
-func (e *Engine) FreeDoc(docID int) {
+func (e *Engine) FreeDoc(docID int) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.vm.Set("_docId", docID)
-	e.vm.RunString(`globalThis._docs[_docId] = null;`)
+	if err := e.setGlobals(map[string]any{"_docId": docID}); err != nil {
+		return err
+	}
+	if _, err := e.vm.RunString(`globalThis._docs[_docId] = null;`); err != nil {
+		return fmt.Errorf("free doc %d: %w", docID, err)
+	}
+	return nil
 }
