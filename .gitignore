@@ -18,6 +18,7 @@ catalog/specs/*.graphql
 !/library/affine/
 !/library/affine/**
 /library/affine/affine.exe
+/library/affine/affine-pp-cli.exe
 /library/affine/build/
 dist/
 claude-upgrade-progress.json

@@ -16,7 +16,7 @@ tags:
   - asymmetric-failure
   - env-vars
   - hermes
-  - legacy-agent-host
+  - openclaw
   - frontmatter-design
 related_components:
   - authentication
@@ -28,7 +28,7 @@ related_components:
 
 ## Context
 
-Agent hosts (Hermes, legacy agent host, future hosts) read a SKILL.md frontmatter field that lists "env vars the user must set" and prompt the user for each at install time. The natural impulse when adding support for a new host is to populate the field from the existing auth metadata: walk the spec's `auth.EnvVarSpecs` (which carry `Kind` ∈ `{per_call, auth_flow_input, harvested}` and `Required` flags), filter to "user-set required," emit the survivors.
+Agent hosts (Hermes, OpenClaw, future hosts) read a SKILL.md frontmatter field that lists "env vars the user must set" and prompt the user for each at install time. The natural impulse when adding support for a new host is to populate the field from the existing auth metadata: walk the spec's `auth.EnvVarSpecs` (which carry `Kind` ∈ `{per_call, auth_flow_input, harvested}` and `Required` flags), filter to "user-set required," emit the survivors.
 
 Two rounds of plan review surfaced that this is a trap. The asymmetry of the failure mode makes it not worth shipping:
 
@@ -37,7 +37,7 @@ Two rounds of plan review surfaced that this is a trap. The asymmetry of the fai
 
 The data needed to classify reliably (PerCall vs AuthFlowInput vs Harvested + Required + Sensitive) was added to the spec model in a prior iteration. But the data isn't *enough* — many legacy specs only have a flat `auth.env_vars: [...]` list with no kind annotation, and even on rich specs the `Sensitive` flag has two semantically distinct meanings (redact-in-logs vs don't-publish-in-public-metadata) that collide when you try to use it as a public-emission gate.
 
-After two rewrites trying to make the classifier safe, we shipped v1 with **no env-var declarations in either Hermes or legacy agent host frontmatter**. The same information lives in the README's `## Use with Claude Code` and similar sections, branched by `auth.Type`, in human-readable prose. Agent hosts that drive credential setup do so via the README, not via a structured field.
+After two rewrites trying to make the classifier safe, we shipped v1 with **no env-var declarations in either Hermes or OpenClaw frontmatter**. The same information lives in the README's `## Use with Claude Code` and similar sections, branched by `auth.Type`, in human-readable prose. Agent hosts that drive credential setup do so via the README, not via a structured field.
 
 ## Guidance
 
@@ -52,7 +52,7 @@ If the answers are "asymmetric," "no," and "yes," skip the structured field. Doc
 ```yaml
 # What v1 ships (after stripping the env-var hoist):
 metadata:
-  legacy-agent-host:
+  openclaw:
     requires:
       bins:
         - mercury-pp-cli
@@ -93,7 +93,7 @@ The asymmetric-failure-mode framing is the load-bearing concept. Both round-1 an
 - The `Sensitive` flag's redact-in-logs vs don't-publish-in-public-metadata semantics collided. The intuitive guard `!Sensitive` excluded legitimate user-set API keys (which spec authors correctly mark `Sensitive: true` so they're redacted in `--debug` output). Removing the guard let OAuth `CLIENT_SECRET` leak.
 - The `Kind`-based filter (`per_call` only) excluded `auth_flow_input` env vars that users genuinely supply once during initial setup (OAuth `CLIENT_ID`).
 - Legacy specs without `EnvVarSpecs` populated would have to be classified by `auth.type` heuristic alone, with no signal for whether a flat `env_vars` list is "user-set keys" vs "harvested cookie names."
-- Even with a perfect classifier, the consumer (Hermes / legacy agent host) might interpret the field differently than we expect. We had no real-loader test until very late.
+- Even with a perfect classifier, the consumer (Hermes / OpenClaw) might interpret the field differently than we expect. We had no real-loader test until very late.
 
 Each fix introduced a new edge case. The fundamental issue: classification has to be *more* reliable than the failure-cost ratio justifies. With ~1000:1 cost asymmetry, even a 99%-accurate classifier ships an unacceptable false-positive rate.
 
@@ -124,7 +124,7 @@ Don't apply this pattern when:
 
   - Found in review: the `!Sensitive` guard collides with the legitimate use of `Sensitive: true` on user-set API keys (for log redaction). Removing the guard reintroduces the `CLIENT_SECRET` leak. There's no consistent semantics for `Sensitive` that satisfies both the redaction and the publish-to-public-metadata use cases.
 
-**Final plan**: don't emit `required_environment_variables` at all. Strip the equivalent legacy agent host fields too for symmetry. Lean on the existing `auth.Type`-branched README content for credential UX.
+**Final plan**: don't emit `required_environment_variables` at all. Strip the equivalent OpenClaw fields too for symmetry. Lean on the existing `auth.Type`-branched README content for credential UX.
 
 The lesson isn't "we picked the wrong predicate twice" — it's "the data structure isn't fit for the public-metadata use case, and forcing fit produces increasingly subtle bugs." Recognizing that earlier saves multiple plan-review rounds.
 
@@ -180,4 +180,4 @@ Until then, prose UX is the honest answer.
 - `docs/solutions/design-patterns/auth-envvar-rich-model-2026-05-05.md` — the data model that motivated the classifier attempts; this learning is about *not* using that model for public emission, not about the model itself
 - `internal/generator/templates/skill.md.tmpl` — frontmatter shape post-strip (no `requires.env`, no `envVars`, no `primaryEnv`)
 - `internal/generator/templates/readme.md.tmpl` — the prose alternative, branched by `auth.Type`
-- `docs/plans/2026-05-06-002-feat-hermes-legacy-agent-host-frontmatter-alignment-plan.md` — full design rationale + cross-references to the round-1 / round-2 review findings that surfaced the asymmetric-failure problem
+- `docs/plans/2026-05-06-002-feat-hermes-openclaw-frontmatter-alignment-plan.md` — full design rationale + cross-references to the round-1 / round-2 review findings that surfaced the asymmetric-failure problem

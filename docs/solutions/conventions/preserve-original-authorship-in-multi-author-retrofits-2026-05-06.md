@@ -29,7 +29,7 @@ related_components:
 
 > **Cross-repo note.** The sweep tool that triggered this lesson lives in [`mvanhorn/printing-press-library`](https://github.com/mvanhorn/printing-press-library) at `tools/sweep-frontmatter/main.go`. The lesson itself applies anywhere `cli-printing-press` (this repo) ships generation or rewriting tooling that touches multi-author content — primarily the published library, but also any future cross-CLI sweep we add to the generator's surface.
 
-The Hermes / legacy agent host frontmatter alignment work needed to add an `author:` field to every existing CLI's published `library/<cat>/<api>/SKILL.md`. The sweep tool's first cut resolved the field from the operator's `git config user.name` — a pragmatic default that worked for fresh prints (whoever runs `/printing-press` is the author) and that mirrored how every other field was being populated.
+The Hermes / OpenClaw frontmatter alignment work needed to add an `author:` field to every existing CLI's published `library/<cat>/<api>/SKILL.md`. The sweep tool's first cut resolved the field from the operator's `git config user.name` — a pragmatic default that worked for fresh prints (whoever runs `/printing-press` is the author) and that mirrored how every other field was being populated.
 
 The result, after running the sweep across all 49 published CLIs:
 
@@ -107,7 +107,7 @@ Three failure modes the curated-map approach prevents:
 
 1. **Attribution flip on every regen.** Without the map, every operator running the sweep silently overwrites authorship with their own identity. Attribution is wrong AT BEST temporarily (until the next sweep with the right operator) and wrong PERMANENTLY in the worst case (operator forgets to undo, the wrong attribution ships to a public registry).
 2. **Burn trust with actual authors.** The CLIs in this library represent real work by real people. A tool that silently rewrites that work's attribution to the operator implies a claim of ownership that wasn't earned. Even if no one notices for months, the eventual discovery is a credibility hit that's hard to recover from.
-3. **Compounding error in derivative artifacts.** Hermes / legacy agent host skill registries cache the `author:` field. Once a wrong value ships, retracting it requires another sweep + a re-publish. If users have already cached the wrong attribution locally, retraction may not even reach them.
+3. **Compounding error in derivative artifacts.** Hermes / OpenClaw skill registries cache the `author:` field. Once a wrong value ships, retracting it requires another sweep + a re-publish. If users have already cached the wrong attribution locally, retraction may not even reach them.
 
 The "use the operator's identity" default isn't malicious — it's the path of least resistance when you're writing the tool. The lesson is to recognize when the path of least resistance produces a class of bug (silent attribution flip) that's worse than the alternative (a 30-minute audit + 49-line lookup table).
 
