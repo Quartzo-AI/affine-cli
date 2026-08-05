@@ -185,13 +185,15 @@ func TestSaveStateVectorAndDelta(t *testing.T) {
 	docID, _ := e.NewDoc()
 
 	// Add initial data
-	e.RunScript(`
+	if _, err := e.RunScript(`
 		(function() {
 			var doc = globalThis._docs[0];
 			doc.getMap("blocks").set("b1", new Y.Map());
 			return "ok";
 		})()
-	`)
+	`); err != nil {
+		t.Fatalf("setup script: %v", err)
+	}
 
 	// Save state vector
 	sv, err := e.SaveStateVector(docID)
@@ -203,13 +205,15 @@ func TestSaveStateVectorAndDelta(t *testing.T) {
 	}
 
 	// Add more data
-	e.RunScript(`
+	if _, err := e.RunScript(`
 		(function() {
 			var doc = globalThis._docs[0];
 			doc.getMap("blocks").set("b2", new Y.Map());
 			return "ok";
 		})()
-	`)
+	`); err != nil {
+		t.Fatalf("setup script: %v", err)
+	}
 
 	// Encode delta
 	delta, err := e.EncodeDelta(docID, sv)
@@ -237,7 +241,9 @@ func TestFreeDoc(t *testing.T) {
 	}
 
 	docID, _ := e.NewDoc()
-	e.FreeDoc(docID)
+	if err := e.FreeDoc(docID); err != nil {
+		t.Fatalf("FreeDoc error: %v", err)
+	}
 
 	// After freeing, reading should fail gracefully
 	_, err = e.ReadBlocks(docID)
@@ -362,7 +368,9 @@ func TestParseInlineMarkdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e.vm.Set("_testInput", tt.input)
+			if err := e.vm.Set("_testInput", tt.input); err != nil {
+				t.Fatalf("bind test global: %v", err)
+			}
 			val, err := e.RunScript(`JSON.stringify(parseInlineMarkdown(_testInput))`)
 			if err != nil {
 				t.Fatalf("parseInlineMarkdown error: %v", err)
@@ -383,13 +391,15 @@ func TestCreateFormattedBlock(t *testing.T) {
 	docID, _ := e.NewDoc()
 
 	// Initialize blocks map
-	e.RunScript(`
+	if _, err := e.RunScript(`
 		(function() {
 			var doc = globalThis._docs[0];
 			doc.getMap("blocks");
 			return "ok";
 		})()
-	`)
+	`); err != nil {
+		t.Fatalf("setup script: %v", err)
+	}
 
 	// Create a block with formatted text
 	err = e.CreateFormattedBlock(docID, "fmt-block-1", "affine:paragraph", "text",
@@ -399,7 +409,9 @@ func TestCreateFormattedBlock(t *testing.T) {
 	}
 
 	// Verify the block exists and read its delta to check attributes
-	e.vm.Set("_docId", docID)
+	if err := e.vm.Set("_docId", docID); err != nil {
+		t.Fatalf("bind test global: %v", err)
+	}
 	val, err := e.RunScript(`
 		(function() {
 			var doc = globalThis._docs[0];

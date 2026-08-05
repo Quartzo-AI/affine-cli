@@ -221,7 +221,9 @@ func auditBlocks(cfg *config.Config, engine *yjs.Engine, opts DocAuditOptions) (
 		if err != nil {
 			return nil, err
 		}
-		defer res.Body.Close()
+		// Read-only GET: the body is fully consumed below and a Close error on a
+		// response body carries no information the caller can act on.
+		defer func() { _ = res.Body.Close() }()
 		if res.StatusCode == http.StatusTooManyRequests {
 			return nil, fmt.Errorf("snapshot %s: rate limited: %s", opts.Timestamp, res.Status)
 		}

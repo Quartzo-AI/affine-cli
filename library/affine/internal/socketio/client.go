@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	client "github.com/zishang520/engine.io-client-go/transports"
@@ -20,7 +19,6 @@ const (
 // Client wraps a Socket.io connection to an AFFiNE server.
 type Client struct {
 	socket *sio.Socket
-	mu     sync.Mutex
 }
 
 // WSURLFromGraphQL converts a GraphQL endpoint URL to a WebSocket base URL.
@@ -70,13 +68,15 @@ func Connect(baseURL, cookie, bearer string) (*Client, error) {
 		return nil, fmt.Errorf("socket.io create: %w", err)
 	}
 
-	socket.On("connect", func(args ...any) {
+	if err := socket.On("connect", func(args ...any) {
 		select {
 		case connected <- struct{}{}:
 		default:
 		}
-	})
-	socket.On("connect_error", func(args ...any) {
+	}); err != nil {
+		return nil, fmt.Errorf("socket.io register connect handler: %w", err)
+	}
+	if err := socket.On("connect_error", func(args ...any) {
 		var e error
 		if len(args) > 0 {
 			if err, ok := args[0].(error); ok {
@@ -91,7 +91,9 @@ func Connect(baseURL, cookie, bearer string) (*Client, error) {
 		case connectErr <- e:
 		default:
 		}
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("socket.io register connect_error handler: %w", err)
+	}
 
 	// If already connected (race), handle it
 	if socket.Connected() {
@@ -193,22 +195,30 @@ func (c *Client) PushDocUpdate(workspaceID, docID, updateBase64 string) error {
 // PushDocUpdateNoAck pushes a Y.js update without waiting for a Socket.IO ack.
 // This is useful for large initial document snapshots where the AFFiNE server
 // persists the update but the Go socket client can stall while waiting for ack.
-func (c *Client) PushDocUpdateNoAck(workspaceID, docID, updateBase64 string) {
-	c.socket.Emit("space:push-doc-update", map[string]any{
+// Not waiting for the ack means delivery is unconfirmed, but a failed emit means
+// the update never left this process, so the caller must still see that error.
+func (c *Client) PushDocUpdateNoAck(workspaceID, docID, updateBase64 string) error {
+	if err := c.socket.Emit("space:push-doc-update", map[string]any{
 		"spaceType": "workspace",
 		"spaceId":   workspaceID,
 		"docId":     docID,
 		"update":    updateBase64,
-	})
+	}); err != nil {
+		return fmt.Errorf("push-doc-update emit: %w", err)
+	}
+	return nil
 }
 
-// DeleteDoc sends a delete doc event (fire-and-forget).
-func (c *Client) DeleteDoc(workspaceID, docID string) {
-	c.socket.Emit("space:delete-doc", map[string]any{
+// DeleteDoc sends a delete doc event without waiting for an ack.
+func (c *Client) DeleteDoc(workspaceID, docID string) error {
+	if err := c.socket.Emit("space:delete-doc", map[string]any{
 		"spaceType": "workspace",
 		"spaceId":   workspaceID,
 		"docId":     docID,
-	})
+	}); err != nil {
+		return fmt.Errorf("delete-doc emit: %w", err)
+	}
+	return nil
 }
 
 // emitWithAck emits an event and waits for an acknowledgement.
