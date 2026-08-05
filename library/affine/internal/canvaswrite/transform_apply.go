@@ -171,6 +171,9 @@ func validateTransformOperations(ops []TransformOperation) error {
 			if value, ok := op.After.(string); !ok || strings.TrimSpace(value) == "" {
 				return fmt.Errorf("set_display_mode operation for %q requires after string", op.ID)
 			}
+		case op.Kind == CardCreateKind:
+			// Per-operation invariants are checked as a group below, so block IDs
+			// duplicated across cards in the same plan are rejected too.
 		case op.Kind == "set_metadata":
 			metadata, ok := transformAfterMetadata(op.After)
 			if !ok || len(metadata) != 1 {
@@ -186,7 +189,7 @@ func validateTransformOperations(ops []TransformOperation) error {
 			return fmt.Errorf("unsupported transform operation %q", op.Kind)
 		}
 	}
-	return nil
+	return validateCardCreateOperations(ops)
 }
 
 func TransformDiffPreview(ops []TransformOperation) []DiffIssue {
@@ -204,6 +207,9 @@ func TransformDiffPreview(ops []TransformOperation) []DiffIssue {
 			issue.Category = "geometry_changed"
 		case op.Kind == "set_display_mode":
 			issue.Category = "display_mode_changed"
+		case op.Kind == CardCreateKind:
+			issue.Category = "card_created"
+			issue.SuggestedNextAction = "Review card geometry, frame and text before live apply."
 		case op.Kind == "set_metadata":
 			issue.Category = "metadata_changed"
 		default:
@@ -256,7 +262,11 @@ func transformAfterMetadata(v any) (map[string]any, bool) {
 }
 
 func transformApplyScript(doc int, ops []TransformOperation) string {
-	rawOps, _ := json.Marshal(ops)
+	rawOps, err := asciiJSON(ops)
+	if err != nil {
+		raw, _ := json.Marshal(ops)
+		rawOps = string(raw)
+	}
 	return fmt.Sprintf(`
 		(function() {
 			var doc = globalThis._docs[%d];
@@ -274,9 +284,15 @@ func transformApplyScript(doc int, ops []TransformOperation) string {
 					return Number(v.toFixed(4)).toString();
 				}).join(",") + "]";
 			}
+			%s
 			var applied = [];
 			for (var i = 0; i < ops.length; i++) {
 				var op = ops[i];
+				if (op.kind === "create_card") {
+					createCard(op.id, op.after);
+					applied.push(op.id);
+					continue;
+				}
 				var block = requireBlock(op.id);
 				if (op.kind === "move" || op.kind === "resize" || op.kind.indexOf("align_") === 0 || op.kind.indexOf("distribute_") === 0) {
 					block.set("prop:xywh", xywhString(op.after));
@@ -294,5 +310,5 @@ func transformApplyScript(doc int, ops []TransformOperation) string {
 			}
 			return JSON.stringify({applied_ids: applied});
 		})()
-	`, doc, string(rawOps))
+	`, doc, rawOps, cardCreateScriptHelpers)
 }

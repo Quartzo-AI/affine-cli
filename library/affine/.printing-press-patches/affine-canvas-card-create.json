@@ -1,0 +1,16 @@
+{
+  "schema_version": 2,
+  "id": "affine-canvas-card-create",
+  "applied_at": "2026-08-04",
+  "summary": "Adds canvas card create: a create_card transform operation that builds real affine:note cards through the gated Y.js write layer.",
+  "files": [
+    "internal/canvaswrite/card_create.go",
+    "internal/canvaswrite/card_create_test.go",
+    "internal/canvaswrite/transform_apply.go",
+    "internal/cli/canvas.go",
+    "internal/cli/canvas_card_create.go",
+    "internal/cli/canvas_card_create_test.go"
+  ],
+  "reason": "Agents had no first-class card creation primitive and were falling back to disposable local helpers without the canvas write gates. create_card joins the closed transform allowlist so it inherits pre-integrity, backup/state vector, post-local integrity, delta push, reload verification and post-integrity, and every created block carries sys:children as a Y.Array.",
+  "validated_outcome": "go build ./... , go vet ./... and go test ./... (320 tests) with unit coverage for the validator, the Y.Array construction probe, frame registration and UTF-8 round trip. Not exercised against a live AFFiNE board."
+}

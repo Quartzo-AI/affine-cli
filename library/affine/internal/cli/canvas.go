@@ -424,9 +424,10 @@ func newCanvasDocAuditCmd(flags *rootFlags) *cobra.Command {
 func newCanvasCardCmd(flags *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "card",
-		Short: "Patch individual canvas cards",
+		Short: "Create and patch individual canvas cards",
 		RunE:  parentNoSubcommandRunE(flags),
 	}
+	cmd.AddCommand(newCanvasCardCreateCmd(flags))
 	cmd.AddCommand(newCanvasCardSetImageCmd(flags))
 	cmd.AddCommand(newCanvasCardInspectCmd(flags))
 	return cmd

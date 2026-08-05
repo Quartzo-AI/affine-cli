@@ -98,6 +98,14 @@ These capabilities aren't available in any other tool for this API.
   ```
 
 ### Canvas repair
+- **`canvas card create`** — Creates AFFiNE note cards on an edgeless doc through the gated Y.js write layer, with `sys:children` as a `Y.Array` on the card and on every leaf paragraph, `prop:xywh`, `prop:displayMode`, the page root updated and the containing frame's `childElementIds` updated.
+
+  _Use this instead of a disposable local helper when a board needs new operational cards. Without `--apply`/`--live` it only emits a validated `canvas_transform` plan and mutates nothing._
+
+  ```bash
+  affine-pp-cli canvas card create --doc <doc-id> --id card-a --x 0 --y 0 --w 360 --h 220 --text "### Card name" --json
+  affine-pp-cli canvas card create --spec cards.json --live --workspace <workspace-id> --doc <doc-id> --backup-dir ./backups --yes --json
+  ```
 - **`canvas card set-image`** — Patches an existing AFFiNE canvas card image/logo while preserving card identity and text.
 
   _Use this when a visual card asset needs to change without rebuilding the board._
