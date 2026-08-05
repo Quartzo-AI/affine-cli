@@ -162,7 +162,7 @@ func decodeCardCreateSpec(v any) (CardCreateSpec, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&spec); err != nil {
-		return CardCreateSpec{}, fmt.Errorf("create_card operation has an invalid after payload: %v", err)
+		return CardCreateSpec{}, fmt.Errorf("create_card operation has an invalid after payload: %w", err)
 	}
 	return spec, nil
 }
