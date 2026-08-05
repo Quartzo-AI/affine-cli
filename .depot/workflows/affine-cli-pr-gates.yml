@@ -1,0 +1,87 @@
+# =============================================================================
+# affine-cli-pr-gates.yml — Depot CI gate for Quartzo-AI/affine-cli
+# =============================================================================
+#
+# Depot is the only CI executor for this repository. This file uses GitHub
+# Actions YAML syntax, which Depot consumes; the GitHub Actions service is not
+# involved and `.github/workflows/` must stay empty.
+#
+# SCOPE — deliberately narrow.
+#   This repo is a fork of mvanhorn/cli-printing-press. Upstream's own CI
+#   (lint/golden/main-ci/release and six process workflows) validates the
+#   Printing Press *code generator* at the repo root. Quartzo does not publish
+#   generated CLIs and does not cut releases from this fork, so gating the root
+#   module would mean running >13 minutes of upstream tests that fail on Windows
+#   for CRLF reasons and that no Quartzo change touches.
+#
+#   What Quartzo actually owns and ships is `library/affine` — the AFFiNE CLI,
+#   its own Go module (`affine-pp-cli`), which does not exist upstream. That is
+#   what this gate protects.
+#
+#   If a change ever touches the root generator, widen this file deliberately
+#   rather than assuming the gate covered it.
+name: affine-cli PR gates
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Pinned to the toolchain the CLI is built with on the fleet. library/affine's
+  # go.mod declares `go 1.26` as a floor; this is the actual version, not the floor.
+  GO_VERSION: "1.26.5"
+
+jobs:
+  build-and-test:
+    name: build and test (library/affine)
+    runs-on: depot-ubuntu-24.04
+    defaults:
+      run:
+        working-directory: library/affine
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: library/affine/go.sum
+
+      - name: build
+        run: go build ./cmd/affine-pp-cli
+
+      - name: test
+        run: go test ./...
+
+  lint:
+    name: lint (library/affine)
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: library/affine/go.sum
+
+      # v9 + an explicit version is required, not cosmetic: the action's older
+      # default ships a golangci-lint built with Go 1.24, which refuses a
+      # go 1.26 target with "language version used to build golangci-lint is
+      # lower than the targeted Go version". v2.11.4 is what upstream pinned.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.4
+          verify: false
+          working-directory: library/affine
+          # This config had never actually run: upstream lints only the repo
+          # root, so library/affine accumulated 66 findings (29 unused, 28
+          # errcheck, 6 staticcheck, 3 formatting). Note errcheck is not in the
+          # module's `enable` list — v2 treats `enable` as additive to the
+          # default set, which is itself part of why nobody noticed.
+          #
+          # Gating all 66 now would mean rewriting error handling inside the
+          # Y.js write paths in a CI-migration PR. So: gate new code, keep the
+          # debt visible and unhidden, and retire it in its own change.
+          only-new-issues: true
