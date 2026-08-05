@@ -979,7 +979,7 @@
 ### Features
 
 * **cli:** add public parameter names ([#648](https://github.com/mvanhorn/cli-printing-press/issues/648)) ([cf91eab](https://github.com/mvanhorn/cli-printing-press/commit/cf91eab3bbbd748107bd31618ef357c3a93c592e))
-* **cli:** Hermes/legacy agent host frontmatter alignment for printed CLIs ([#655](https://github.com/mvanhorn/cli-printing-press/issues/655)) ([fd7fa6e](https://github.com/mvanhorn/cli-printing-press/commit/fd7fa6eaec3cd5dfa5fbd1fc357def843b356125))
+* **cli:** Hermes/OpenClaw frontmatter alignment for printed CLIs ([#655](https://github.com/mvanhorn/cli-printing-press/issues/655)) ([fd7fa6e](https://github.com/mvanhorn/cli-printing-press/commit/fd7fa6eaec3cd5dfa5fbd1fc357def843b356125))
 * **cli:** improve generated money workflows and artifact safety ([#653](https://github.com/mvanhorn/cli-printing-press/issues/653)) ([6d9ab66](https://github.com/mvanhorn/cli-printing-press/commit/6d9ab664b06e1a1c24c0014af14cae4bd40cb0f1))
 * **cli:** scope verify-skill flag-names; add canonical-sections check ([#665](https://github.com/mvanhorn/cli-printing-press/issues/665)) ([c69e77c](https://github.com/mvanhorn/cli-printing-press/commit/c69e77c8109b5feec36ed4e17a94ac3eb11237dd))
 

@@ -122,6 +122,11 @@ go install github.com/mvanhorn/printing-press-library/library/other/`+apiName+`/
 	// SKILL.md
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(`---
 name: pp-`+apiName+`
+metadata:
+  openclaw:
+    install:
+      - kind: go
+        module: github.com/mvanhorn/printing-press-library/library/other/`+apiName+`/cmd/`+cliName+`
 ---
 
 # `+apiName+`

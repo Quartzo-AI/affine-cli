@@ -5,6 +5,11 @@ author: "printing-press-golden"
 license: "Apache-2.0"
 argument-hint: "<command> [args] | install cli|mcp"
 allowed-tools: "Read Bash"
+metadata:
+  openclaw:
+    requires:
+      bins:
+        - printing-press-oauth2-pp-cli
 ---
 
 # Printing Press Oauth2 — Printing Press CLI
