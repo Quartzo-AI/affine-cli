@@ -75,13 +75,9 @@ jobs:
           version: v2.11.4
           verify: false
           working-directory: library/affine
-          # This config had never actually run: upstream lints only the repo
-          # root, so library/affine accumulated 66 findings (29 unused, 28
-          # errcheck, 6 staticcheck, 3 formatting). Note errcheck is not in the
-          # module's `enable` list — v2 treats `enable` as additive to the
-          # default set, which is itself part of why nobody noticed.
-          #
-          # Gating all 66 now would mean rewriting error handling inside the
-          # Y.js write paths in a CI-migration PR. So: gate new code, keep the
-          # debt visible and unhidden, and retire it in its own change.
-          only-new-issues: true
+          # The module is at zero findings, so the gate is absolute: any new
+          # issue fails the PR. It got there by fixing the real ones (the yjs
+          # engine was discarding every vm.Set error, which would leave a stale
+          # doc handle bound and mutate the wrong AFFiNE document) and by giving
+          # the 243 printed files Go's canonical `Code generated ... DO NOT EDIT.`
+          # marker, which is what makes the linter skip machine-authored code.
