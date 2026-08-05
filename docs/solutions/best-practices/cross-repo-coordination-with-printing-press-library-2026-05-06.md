@@ -32,7 +32,7 @@ related_components:
 
 This repo (`cli-printing-press`) is the upstream generator for printed CLIs. The output flows downstream to `printing-press-library` where the CLIs are published. The library runs CI checks and an auto-regeneration workflow that depend on assumptions about the upstream's output shape. When we change those assumptions without coordinating, downstream CI fails — often across every CLI at once — and the failure messages don't point at the upstream change as the cause.
 
-Two known coupling points have produced this failure mode. Both surfaced during the Hermes / legacy agent host frontmatter alignment work. Future template / schema changes are likely to produce more, and the pattern is what to remember.
+Two known coupling points have produced this failure mode. Both surfaced during the Hermes / OpenClaw frontmatter alignment work. Future template / schema changes are likely to produce more, and the pattern is what to remember.
 
 ## The two known couplings
 
@@ -41,7 +41,7 @@ Two known coupling points have produced this failure mode. Both surfaced during 
 The library has two trees that must stay byte-identical:
 
 - `library/<cat>/<api>/SKILL.md` — canonical content
-- `cli-skills/pp-<api>/SKILL.md` — flat-namespace mirror, used by `npx skills add` and Hermes / legacy agent host install paths
+- `cli-skills/pp-<api>/SKILL.md` — flat-namespace mirror, used by `npx skills add` and Hermes / OpenClaw install paths
 
 `tools/generate-skills/main.go` (in printing-press-library) is a verbatim mirror tool that copies the source to the mirror. `.github/workflows/generate-skills.yml` runs it on push to main. **It does not run on pull request.**
 
@@ -189,4 +189,4 @@ One commit, one CI cycle. Without the local regen, you get three commits (source
 - `printing-press-library/tools/generate-skills/main.go` (cross-repo) — the verbatim mirror generator
 - `printing-press-library/.github/scripts/verify-skill/verify_skill.py` (cross-repo) — the validator + `COMMON_FLAGS` allowlist
 - `printing-press-library/AGENTS.md` (cross-repo) — has matching pre-flight notes for the validator-allowlist coupling
-- `docs/plans/2026-05-06-002-feat-hermes-legacy-agent-host-frontmatter-alignment-plan.md` — the plan that surfaced both couplings
+- `docs/plans/2026-05-06-002-feat-hermes-openclaw-frontmatter-alignment-plan.md` — the plan that surfaced both couplings

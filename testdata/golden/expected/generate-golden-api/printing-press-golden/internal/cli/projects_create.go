@@ -13,21 +13,36 @@ import (
 )
 
 func newProjectsCreateCmd(flags *rootFlags) *cobra.Command {
+	var flagXApiVersion string
+	var flagXRequestId string
 	var bodyName string
 	var bodyOwnerEmail string
 	var bodyVisibility string
 	var stdinBody bool
 
 	cmd := &cobra.Command{
-		Use:         "create",
-		Short:       "Create project",
-		Example:     "  printing-press-golden-pp-cli projects create --name example-resource",
+		Use:   "create",
+		Short: "Create project",
+		// TODO: replace placeholder example values before relying on this for live dogfood.
+		Example:     "  printing-press-golden-pp-cli projects create --x-api-version example-value --name example-resource",
 		Annotations: map[string]string{"pp:endpoint": "projects.create", "pp:method": "POST", "pp:path": "/projects"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Bare invocation of a command with required input prints help
 			// instead of pflag's terse "required flag not set" error. Optional-
 			// only read commands fall through so a bare call still executes.
-			if cmd.Flags().NFlag() == 0 && len(args) == 0 && !flags.dryRun {
+			// Machine callers (--json/--agent, which sets asJSON) get a usage
+			// error + exit 2 instead of silent exit-0 help, so an incomplete
+			// invocation is never mistaken for success.
+			if !hasChangedLocalFlags(cmd) && len(args) == 0 && !flags.dryRun {
+				if flags.asJSON {
+					if printErr := printJSONFiltered(cmd.OutOrStdout(), map[string]any{
+						"error": "requires input",
+						"usage": cmd.CommandPath() + " --help",
+					}, flags); printErr != nil {
+						return printErr
+					}
+					return usageErr(fmt.Errorf("%q requires input; run %q for usage", cmd.CommandPath(), cmd.CommandPath()+" --help"))
+				}
 				return cmd.Help()
 			}
 			if !stdinBody {
@@ -38,14 +53,23 @@ func newProjectsCreateCmd(flags *rootFlags) *cobra.Command {
 					return fmt.Errorf("required flag \"%s\" not set", "visibility")
 				}
 			}
+			path := "/projects"
 			c, err := flags.newClient()
 			if err != nil {
 				return err
 			}
+			headerOverrides := map[string]string{}
 
-			path := "/projects"
+			if cmd.Flags().Changed("x-api-version") || flagXApiVersion != "" {
+				headerOverrides["X-Api-Version"] = formatCLIParamValue(flagXApiVersion)
+			}
+
+			if cmd.Flags().Changed("x-request-id") || flagXRequestId != "" {
+				headerOverrides["X-Request-Id"] = formatCLIParamValue(flagXRequestId)
+			}
+
 			params := map[string]string{}
-			var body map[string]any
+			var body any
 			if stdinBody {
 				stdinData, err := io.ReadAll(os.Stdin)
 				if err != nil {
@@ -57,18 +81,19 @@ func newProjectsCreateCmd(flags *rootFlags) *cobra.Command {
 				}
 				body = jsonBody
 			} else {
-				body = map[string]any{}
-				if bodyName != "" {
-					body["name"] = bodyName
+				bodyMap := map[string]any{}
+				body = bodyMap
+				if cmd.Flags().Changed("name") || bodyName != "" {
+					bodyMap["name"] = bodyName
 				}
-				if bodyOwnerEmail != "" {
-					body["owner_email"] = bodyOwnerEmail
+				if cmd.Flags().Changed("owner-email") || bodyOwnerEmail != "" {
+					bodyMap["owner_email"] = bodyOwnerEmail
 				}
-				if bodyVisibility != "" {
-					body["visibility"] = bodyVisibility
+				if cmd.Flags().Changed("visibility") || bodyVisibility != "" {
+					bodyMap["visibility"] = bodyVisibility
 				}
 			}
-			data, statusCode, err := c.PostWithParams(cmd.Context(), path, params, body)
+			data, statusCode, err := c.PostWithParamsAndHeaders(cmd.Context(), path, params, body, headerOverrides)
 			if err != nil {
 				return classifyAPIError(err, flags)
 			}
@@ -135,6 +160,9 @@ func newProjectsCreateCmd(flags *rootFlags) *cobra.Command {
 					"status":   statusCode,
 					"success":  statusCode >= 200 && statusCode < 300 && (partialFailure == nil || flags.allowPartialFailure),
 				}
+				if flags.agent {
+					envelope["meta"] = map[string]any{"source": "live"}
+				}
 				if partialFailure != nil {
 					envelope["partial_failure"] = partialFailure
 				}
@@ -173,14 +201,26 @@ func newProjectsCreateCmd(flags *rootFlags) *cobra.Command {
 				if len(filtered) > 0 {
 					var parsed any
 					if err := json.Unmarshal(filtered, &parsed); err == nil {
-						envelope["data"] = parsed
+						if flags.agent {
+							envelope["results"] = parsed
+						} else {
+							envelope["data"] = parsed
+						}
 					}
 				}
 				envelopeJSON, err := json.Marshal(envelope)
 				if err != nil {
 					return err
 				}
-				if perr := printOutput(cmd.OutOrStdout(), json.RawMessage(envelopeJSON), true); perr != nil {
+				resultKey := "data"
+				if flags.agent {
+					resultKey = "results"
+				}
+				structured, err := wrapPlatformStructuredOutput(json.RawMessage(envelopeJSON), flags, resultKey, true)
+				if err != nil {
+					return err
+				}
+				if perr := printOutput(cmd.OutOrStdout(), structured, true); perr != nil {
 					return perr
 				}
 				if partialFailure != nil && !flags.allowPartialFailure {
@@ -204,6 +244,8 @@ func newProjectsCreateCmd(flags *rootFlags) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&flagXApiVersion, "x-api-version", "2026-04-01", "Required API version header.")
+	cmd.Flags().StringVar(&flagXRequestId, "x-request-id", "", "Optional per-request correlation ID.")
 	cmd.Flags().StringVar(&bodyName, "name", "", "Name")
 	cmd.Flags().StringVar(&bodyOwnerEmail, "owner-email", "", "Owner email")
 	cmd.Flags().StringVar(&bodyVisibility, "visibility", "", "Visibility")

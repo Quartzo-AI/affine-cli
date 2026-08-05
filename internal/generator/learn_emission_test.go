@@ -101,7 +101,8 @@ func TestGenerateLearnPackageGatedOff(t *testing.T) {
 	t.Parallel()
 
 	apiSpec := minimalSpec("learn-gated")
-	apiSpec.Learn.Enabled = false
+	// Post-flip: opt out so this test exercises the non-learn shape it asserts.
+	apiSpec.Learn.Disabled = true
 	outputDir := filepath.Join(t.TempDir(), "learn-gated-pp-cli")
 	gen := New(apiSpec, outputDir)
 	gen.VisionSet = VisionTemplateSet{Store: true}
@@ -179,6 +180,25 @@ func TestGenerateLearnCLICommandsCompileAndTest(t *testing.T) {
 	// so they don't depend on cobra registration and are included in
 	// the filter.
 	runGoCommand(t, outputDir, "test", "-run", "^(TestTeach|TestRecall|TestLearnings|TestSkipLearnHook|TestNewLearnConfig|TestInitLearn|TestPlaybook)", "./internal/cli/...")
+}
+
+func TestGenerateLearnCommandExamplesAreRunnableOnFirstLine(t *testing.T) {
+	t.Parallel()
+
+	apiSpec := minimalSpec("learn-examples")
+	apiSpec.Learn.Enabled = true
+	outputDir := filepath.Join(t.TempDir(), "learn-examples-pp-cli")
+	gen := New(apiSpec, outputDir)
+	gen.VisionSet = VisionTemplateSet{Store: true}
+	require.NoError(t, gen.Generate())
+
+	teachSrc := readEmitted(t, outputDir, "internal", "cli", "teach.go")
+	require.Contains(t, teachSrc, "Example: `  learn-examples-pp-cli teach --query \"<question>\" --resource-type <type> --resource <id> --resource <id> &`,")
+	require.Contains(t, teachSrc, "Example: `  learn-examples-pp-cli teach-pattern --query-template \"items in {entity}\" --resource-template \"GROUP-{entity:category}\" --resource-type \"items\" --entity-kind \"category\" --strategy substitute`,")
+
+	playbookSrc := readEmitted(t, outputDir, "internal", "cli", "teach_playbook.go")
+	require.Contains(t, playbookSrc, "Example: `  learn-examples-pp-cli teach-playbook --query \"<question that anchors the family>\" --playbook-file ~/playbooks/recipe.json --notes-file ~/playbooks/recipe-notes.md`,")
+	require.Contains(t, playbookSrc, "Example: `  learn-examples-pp-cli playbook amend --query \"<exact recall query>\" --add-note \"summary endpoint envelope: data lives at .results.header, not .header\"`,")
 }
 
 // TestGenerateLearnInitWiresSpec verifies that the emitted learn_init.go

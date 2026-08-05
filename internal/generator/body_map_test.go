@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mvanhorn/cli-printing-press/v4/internal/spec"
+	"github.com/stretchr/testify/require"
 )
 
 // TestBodyMap pins the rendered Go code for each of the three body-param
@@ -14,6 +15,17 @@ import (
 // other two against silent drift after the bash → helper extraction.
 func TestBodyMap(t *testing.T) {
 	t.Parallel()
+
+	encodedSettingsPresence := bodyLeafPresenceExpr(spec.Param{
+		Name:        "settings",
+		Type:        "string",
+		Description: "JSON-encoded string of widget settings",
+	}, "Settings", "settings")
+	encodedPayloadPresence := bodyLeafPresenceExpr(spec.Param{
+		Name:   "payload",
+		Type:   "string",
+		Format: "json-string",
+	}, "Payload", "payload")
 
 	cases := []struct {
 		name   string
@@ -25,7 +37,7 @@ func TestBodyMap(t *testing.T) {
 			name:   "scalar string",
 			body:   []spec.Param{{Name: "name", Type: "string"}},
 			indent: "\t\t\t\t",
-			want: "\t\t\t\tif bodyName != \"\" {\n" +
+			want: "\t\t\t\tif (cmd.Flags().Changed(\"name\") || bodyName != \"\") {\n" +
 				"\t\t\t\t\tbody[\"name\"] = bodyName\n" +
 				"\t\t\t\t}\n",
 		},
@@ -33,7 +45,7 @@ func TestBodyMap(t *testing.T) {
 			name:   "scalar int",
 			body:   []spec.Param{{Name: "count", Type: "int"}},
 			indent: "\t\t\t",
-			want: "\t\t\tif bodyCount != 0 {\n" +
+			want: "\t\t\tif (cmd.Flags().Changed(\"count\") || bodyCount != 0) {\n" +
 				"\t\t\t\tbody[\"count\"] = bodyCount\n" +
 				"\t\t\t}\n",
 		},
@@ -63,40 +75,103 @@ func TestBodyMap(t *testing.T) {
 			name:   "object branch parses JSON and stores parsed value",
 			body:   []spec.Param{{Name: "metadata", Type: "object"}},
 			indent: "\t\t\t",
-			want: "\t\t\tif bodyMetadata != \"\" {\n" +
+			want: "\t\t\tif (cmd.Flags().Changed(\"metadata\") || bodyMetadata != \"\") {\n" +
 				"\t\t\t\tvar parsedMetadata any\n" +
 				"\t\t\t\tif err := json.Unmarshal([]byte(bodyMetadata), &parsedMetadata); err != nil {\n" +
 				"\t\t\t\t\treturn fmt.Errorf(\"parsing --metadata JSON: %w\", err)\n" +
 				"\t\t\t\t}\n" +
-				"\t\t\t\tbody[\"metadata\"] = parsedMetadata\n" +
+				"\t\t\t\tasMap, ok := parsedMetadata.(map[string]any)\n" +
+				"\t\t\t\tif !ok {\n" +
+				"\t\t\t\t\treturn fmt.Errorf(\"--metadata must be a JSON object, got JSON %T\", parsedMetadata)\n" +
+				"\t\t\t\t}\n" +
+				"\t\t\t\tbody[\"metadata\"] = asMap\n" +
 				"\t\t\t}\n",
 		},
 		{
 			name:   "array branch matches object branch shape",
 			body:   []spec.Param{{Name: "tags", Type: "array"}},
 			indent: "\t\t\t",
-			want: "\t\t\tif bodyTags != \"\" {\n" +
+			want: "\t\t\tif (cmd.Flags().Changed(\"tags\") || bodyTags != \"\") {\n" +
 				"\t\t\t\tvar parsedTags any\n" +
 				"\t\t\t\tif err := json.Unmarshal([]byte(bodyTags), &parsedTags); err != nil {\n" +
 				"\t\t\t\t\treturn fmt.Errorf(\"parsing --tags JSON: %w\", err)\n" +
 				"\t\t\t\t}\n" +
-				"\t\t\t\tbody[\"tags\"] = parsedTags\n" +
+				"\t\t\t\tasArray, ok := parsedTags.([]any)\n" +
+				"\t\t\t\tif !ok {\n" +
+				"\t\t\t\t\treturn fmt.Errorf(\"--tags must be a JSON array, got JSON %T\", parsedTags)\n" +
+				"\t\t\t\t}\n" +
+				"\t\t\t\tbody[\"tags\"] = asArray\n" +
 				"\t\t\t}\n",
 		},
 		{
 			// JSON-string params: type is "string" but the format/description
-			// signal JSON content. The branch validates JSON before sending
-			// but stores the raw string (not the parsed value) so the API
-			// receives the user's exact bytes.
-			name:   "jsonString branch validates but stores raw",
+			// signal JSON content — spec authors write these when describing
+			// the *flag input* format. JSON-body APIs expect the decoded
+			// object/array on the wire; storing the raw flag bytes double-
+			// encodes the field (live-hit: Bird CRM 422 on contact create,
+			// Title Toolbox farm create).
+			name:   "jsonString branch validates and stores the decoded value",
 			body:   []spec.Param{{Name: "config", Type: "string", Format: "json"}},
 			indent: "\t\t\t",
-			want: "\t\t\tif bodyConfig != \"\" {\n" +
+			want: "\t\t\tif (cmd.Flags().Changed(\"config\") || bodyConfig != \"\") {\n" +
 				"\t\t\t\tvar parsedConfig any\n" +
 				"\t\t\t\tif err := json.Unmarshal([]byte(bodyConfig), &parsedConfig); err != nil {\n" +
 				"\t\t\t\t\treturn fmt.Errorf(\"parsing --config JSON: %w\", err)\n" +
 				"\t\t\t\t}\n" +
-				"\t\t\t\tbody[\"config\"] = bodyConfig\n" +
+				"\t\t\t\tbody[\"config\"] = parsedConfig\n" +
+				"\t\t\t}\n",
+		},
+		{
+			// Params that explicitly declare an encoded-string wire type
+			// keep the user's exact bytes: the API field genuinely carries
+			// a JSON-encoded string, so decoding it would change the wire
+			// value.
+			name: "explicitly JSON-encoded string param keeps raw bytes",
+			body: []spec.Param{{
+				Name:        "settings",
+				Type:        "string",
+				Description: "JSON-encoded string of widget settings",
+			}},
+			indent: "\t\t\t",
+			want: "\t\t\tif " + encodedSettingsPresence + " {\n" +
+				"\t\t\t\tvar parsedSettings any\n" +
+				"\t\t\t\tif err := json.Unmarshal([]byte(bodySettings), &parsedSettings); err != nil {\n" +
+				"\t\t\t\t\treturn fmt.Errorf(\"parsing --settings JSON: %w\", err)\n" +
+				"\t\t\t\t}\n" +
+				"\t\t\t\tbody[\"settings\"] = bodySettings\n" +
+				"\t\t\t}\n",
+		},
+		{
+			// Same exception via an explicit format value.
+			name:   "format json-string keeps raw bytes",
+			body:   []spec.Param{{Name: "payload", Type: "string", Format: "json-string"}},
+			indent: "\t\t\t",
+			want: "\t\t\tif " + encodedPayloadPresence + " {\n" +
+				"\t\t\t\tvar parsedPayload any\n" +
+				"\t\t\t\tif err := json.Unmarshal([]byte(bodyPayload), &parsedPayload); err != nil {\n" +
+				"\t\t\t\t\treturn fmt.Errorf(\"parsing --payload JSON: %w\", err)\n" +
+				"\t\t\t\t}\n" +
+				"\t\t\t\tbody[\"payload\"] = bodyPayload\n" +
+				"\t\t\t}\n",
+		},
+		{
+			// Polymorphic body fields (for example oneOf scalar-or-object)
+			// accept either a scalar string or a JSON object/array. JSON-looking
+			// values must be parsed before entering the body map so the API sees
+			// an object/array, not a quoted JSON string.
+			name:   "json-or-scalar branch parses composite values and keeps scalar fallback",
+			body:   []spec.Param{{Name: "response_engine", Type: "string", Format: "json_or_scalar"}},
+			indent: "\t\t\t",
+			want: "\t\t\tif (cmd.Flags().Changed(\"response-engine\") || bodyResponseEngine != \"\") {\n" +
+				"\t\t\t\tif looksLikeJSONComposite(bodyResponseEngine) {\n" +
+				"\t\t\t\t\tvar parsedResponseEngine any\n" +
+				"\t\t\t\t\tif err := json.Unmarshal([]byte(bodyResponseEngine), &parsedResponseEngine); err != nil {\n" +
+				"\t\t\t\t\t\treturn fmt.Errorf(\"parsing --response-engine JSON: %w\", err)\n" +
+				"\t\t\t\t\t}\n" +
+				"\t\t\t\t\tbody[\"response_engine\"] = parsedResponseEngine\n" +
+				"\t\t\t\t} else {\n" +
+				"\t\t\t\t\tbody[\"response_engine\"] = bodyResponseEngine\n" +
+				"\t\t\t\t}\n" +
 				"\t\t\t}\n",
 		},
 		{
@@ -106,15 +181,19 @@ func TestBodyMap(t *testing.T) {
 				{Name: "tags", Type: "array"},
 			},
 			indent: "\t",
-			want: "\tif bodyName != \"\" {\n" +
+			want: "\tif (cmd.Flags().Changed(\"name\") || bodyName != \"\") {\n" +
 				"\t\tbody[\"name\"] = bodyName\n" +
 				"\t}\n" +
-				"\tif bodyTags != \"\" {\n" +
+				"\tif (cmd.Flags().Changed(\"tags\") || bodyTags != \"\") {\n" +
 				"\t\tvar parsedTags any\n" +
 				"\t\tif err := json.Unmarshal([]byte(bodyTags), &parsedTags); err != nil {\n" +
 				"\t\t\treturn fmt.Errorf(\"parsing --tags JSON: %w\", err)\n" +
 				"\t\t}\n" +
-				"\t\tbody[\"tags\"] = parsedTags\n" +
+				"\t\tasArray, ok := parsedTags.([]any)\n" +
+				"\t\tif !ok {\n" +
+				"\t\t\treturn fmt.Errorf(\"--tags must be a JSON array, got JSON %T\", parsedTags)\n" +
+				"\t\t}\n" +
+				"\t\tbody[\"tags\"] = asArray\n" +
 				"\t}\n",
 		},
 		{
@@ -125,7 +204,7 @@ func TestBodyMap(t *testing.T) {
 			name:   "required bool without default parses string-backed flag",
 			body:   []spec.Param{{Name: "all_day", Type: "boolean", Required: true}},
 			indent: "\t\t\t",
-			want: "\t\t\tif bodyAllDay != \"\" {\n" +
+			want: "\t\t\tif (cmd.Flags().Changed(\"all-day\") || bodyAllDay != \"\") {\n" +
 				"\t\t\t\tparsedAllDay, err := strconv.ParseBool(bodyAllDay)\n" +
 				"\t\t\t\tif err != nil {\n" +
 				"\t\t\t\t\treturn fmt.Errorf(\"parsing --all-day as bool: %w\", err)\n" +
@@ -189,7 +268,7 @@ func TestBodyMap_BodyNameOverridesJSONKey(t *testing.T) {
 	if !strings.Contains(got, "bodyStartAfter") {
 		t.Errorf("expected public name to drive variable identity, got: %s", got)
 	}
-	if !strings.Contains(got, `body["searchAfter"] = parsedStartAfter`) {
+	if !strings.Contains(got, `body["searchAfter"] = asArray`) {
 		t.Errorf("expected body_name to drive JSON key, got: %s", got)
 	}
 	if strings.Contains(got, `body["startAfter"]`) {
@@ -215,10 +294,10 @@ func TestBodyMap_NestedObject(t *testing.T) {
 	}}, "\t")
 	want := "\t{\n" +
 		"\t\tnestedStart := map[string]any{}\n" +
-		"\t\tif bodyStartDateTime != \"\" {\n" +
+		"\t\tif (cmd.Flags().Changed(\"start-date-time\") || bodyStartDateTime != \"\") {\n" +
 		"\t\t\tnestedStart[\"dateTime\"] = bodyStartDateTime\n" +
 		"\t\t}\n" +
-		"\t\tif bodyStartTimeZone != \"\" {\n" +
+		"\t\tif (cmd.Flags().Changed(\"start-time-zone\") || bodyStartTimeZone != \"\") {\n" +
 		"\t\t\tnestedStart[\"timeZone\"] = bodyStartTimeZone\n" +
 		"\t\t}\n" +
 		"\t\tif len(nestedStart) > 0 {\n" +
@@ -259,6 +338,20 @@ func TestBodyMap_NestedObject_BooleanLeaf(t *testing.T) {
 	}
 }
 
+func TestBodyMap_NestedObject_DefaultTrueBooleanRequiresChangedFlag(t *testing.T) {
+	t.Parallel()
+	got := bodyMap([]spec.Param{{
+		Name: "settings",
+		Type: "object",
+		Fields: []spec.Param{
+			{Name: "enabled", Type: "boolean", Default: true},
+		},
+	}}, "\t")
+
+	require.Contains(t, got, `if cmd.Flags().Changed("settings-enabled") {`)
+	require.NotContains(t, got, `bodySettingsEnabled != false`)
+}
+
 // TestBodyMap_NestedObject_PreservesScalarSiblings verifies that
 // nested and flat body params can coexist: nested produces a block,
 // scalars keep their existing if-then-set form.
@@ -268,7 +361,7 @@ func TestBodyMap_NestedObject_PreservesScalarSiblings(t *testing.T) {
 		{Name: "subject", Type: "string"},
 		{Name: "start", Type: "object", Fields: []spec.Param{{Name: "dateTime", Type: "string"}}},
 	}, "\t")
-	if !strings.Contains(got, `if bodySubject != "" {`) {
+	if !strings.Contains(got, `if (cmd.Flags().Changed("subject") || bodySubject != "") {`) {
 		t.Errorf("scalar branch missing, got:\n%s", got)
 	}
 	if !strings.Contains(got, `body["subject"] = bodySubject`) {
@@ -364,6 +457,37 @@ func TestBodyVarDecls_Flat(t *testing.T) {
 	want := "\n\tvar bodyName string\n\tvar bodyCount int"
 	if got != want {
 		t.Errorf("bodyVarDecls flat mismatch.\n got:%q\nwant:%q", got, want)
+	}
+}
+
+func TestBodyParamTypesHonorDeclaredScalarTypes(t *testing.T) {
+	t.Parallel()
+
+	endpoint := spec.Endpoint{Body: []spec.Param{
+		{Name: "offset", Type: "int"},
+		{Name: "page", Type: "integer"},
+		{Name: "id", Type: "int", Required: true},
+		{Name: "enabled", Type: "bool", Required: true},
+	}}
+
+	decls := bodyVarDecls(endpoint)
+	for _, want := range []string{
+		"var bodyOffset int",
+		"var bodyPage int",
+		"var bodyId int",
+		"var bodyEnabled string",
+	} {
+		require.Contains(t, decls, want)
+	}
+
+	flags := bodyFlagRegs(endpoint)
+	for _, want := range []string{
+		`cmd.Flags().IntVar(&bodyOffset, "offset"`,
+		`cmd.Flags().IntVar(&bodyPage, "page"`,
+		`cmd.Flags().IntVar(&bodyId, "id"`,
+		`cmd.Flags().StringVar(&bodyEnabled, "enabled"`,
+	} {
+		require.Contains(t, flags, want)
 	}
 }
 
@@ -487,10 +611,10 @@ func TestBodyFlagRegs_NonJSONStaysFlat(t *testing.T) {
 	}
 }
 
-// TestBodyRequiredChecks_NestedField uses parent-prefixed flag in the
-// emitted `cmd.Flags().Changed(...)` call so the validator agrees with
-// the flag name registered in bodyFlagRegs.
-func TestBodyRequiredChecks_NestedField(t *testing.T) {
+// TestBodyRequiredChecks_OptionalNestedObject gates required child fields on
+// the optional parent being populated. JSON Schema's child `required` list
+// applies only when the parent object is present.
+func TestBodyRequiredChecks_OptionalNestedObject(t *testing.T) {
 	t.Parallel()
 	got := bodyRequiredChecks(spec.Endpoint{
 		Body: []spec.Param{{
@@ -498,14 +622,97 @@ func TestBodyRequiredChecks_NestedField(t *testing.T) {
 			Type: "object",
 			Fields: []spec.Param{
 				{Name: "dateTime", Type: "string", Required: true},
+				{Name: "timeZone", Type: "string"},
 			},
 		}},
 	}, "\t\t\t")
-	if !strings.Contains(got, `cmd.Flags().Changed("start-date-time")`) {
-		t.Errorf("expected parent-prefixed Changed() call for nested required field, got:\n%s", got)
+	require.Contains(t, got, `if (cmd.Flags().Changed("start-date-time") || bodyStartDateTime != "") || (cmd.Flags().Changed("start-time-zone") || bodyStartTimeZone != "") {`)
+	require.Contains(t, got, `if !cmd.Flags().Changed("start-date-time") && !flags.dryRun {`)
+	require.Contains(t, got, `"required flag \"%s\" not set", "start-date-time"`)
+}
+
+func TestBodyRequiredChecks_OptionalNestedObjectDefaultActivatesParent(t *testing.T) {
+	t.Parallel()
+	got := bodyRequiredChecks(spec.Endpoint{
+		Body: []spec.Param{{
+			Name: "start",
+			Type: "object",
+			Fields: []spec.Param{
+				{Name: "dateTime", Type: "string", Required: true},
+				{Name: "timeZone", Type: "string", Default: "UTC"},
+			},
+		}},
+	}, "\t\t\t")
+	require.Contains(t, got, `if (cmd.Flags().Changed("start-date-time") || bodyStartDateTime != "") || (cmd.Flags().Changed("start-time-zone") || bodyStartTimeZone != "") {`)
+	require.Contains(t, got, `if !cmd.Flags().Changed("start-date-time") && !flags.dryRun {`)
+}
+
+func TestBodyRequiredChecks_RecursiveOptionalObjects(t *testing.T) {
+	t.Parallel()
+	got := bodyRequiredChecks(spec.Endpoint{
+		Body: []spec.Param{{
+			Name: "outer",
+			Type: "object",
+			Fields: []spec.Param{
+				{Name: "label", Type: "string"},
+				{
+					Name: "config",
+					Type: "object",
+					Fields: []spec.Param{
+						{Name: "mode", Type: "string", Required: true},
+						{Name: "note", Type: "string"},
+					},
+				},
+			},
+		}},
+	}, "\t\t\t")
+	require.Contains(t, got, `if (cmd.Flags().Changed("outer-label") || bodyOuterLabel != "") || (cmd.Flags().Changed("outer-config-mode") || bodyOuterConfigMode != "") || (cmd.Flags().Changed("outer-config-note") || bodyOuterConfigNote != "") {`)
+	require.Contains(t, got, `if (cmd.Flags().Changed("outer-config-mode") || bodyOuterConfigMode != "") || (cmd.Flags().Changed("outer-config-note") || bodyOuterConfigNote != "") {`)
+	require.Contains(t, got, `if !cmd.Flags().Changed("outer-config-mode") && !flags.dryRun {`)
+}
+
+func TestBodyRequiredChecks_RequiredNestedObjectRemainsUnconditional(t *testing.T) {
+	t.Parallel()
+	got := bodyRequiredChecks(spec.Endpoint{
+		Body: []spec.Param{{
+			Name:     "start",
+			Type:     "object",
+			Required: true,
+			Fields: []spec.Param{
+				{Name: "dateTime", Type: "string", Required: true},
+				{Name: "timeZone", Type: "string"},
+			},
+		}},
+	}, "\t\t\t")
+	require.NotContains(t, got, `cmd.Flags().Changed("start-time-zone")`)
+	require.Contains(t, got, `if !cmd.Flags().Changed("start-date-time") && !flags.dryRun {`)
+}
+
+func TestMCPBodyInputParams_NestedRequiredFollowsParent(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name           string
+		parentRequired bool
+		wantRequired   bool
+	}{
+		{name: "optional parent", parentRequired: false, wantRequired: false},
+		{name: "required parent", parentRequired: true, wantRequired: true},
 	}
-	if !strings.Contains(got, `"required flag \"%s\" not set", "start-date-time"`) {
-		t.Errorf("expected parent-prefixed flag name in error message, got:\n%s", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := mcpBodyInputParams(spec.Endpoint{Body: []spec.Param{{
+				Name:     "start",
+				Type:     "object",
+				Required: tt.parentRequired,
+				Fields: []spec.Param{{
+					Name: "dateTime", Type: "string", Required: true,
+				}},
+			}}})
+			require.Len(t, got, 1)
+			require.Equal(t, tt.wantRequired, got[0].Required)
+			require.Equal(t, "start-date-time", got[0].FlagName)
+		})
 	}
 }
 
@@ -553,6 +760,17 @@ func TestBodyJSONFallback_FlagRegs(t *testing.T) {
 	}
 }
 
+func TestBodyJSONFallback_FlagRegs_ArrayBody(t *testing.T) {
+	t.Parallel()
+	got := bodyFlagRegs(spec.Endpoint{BodyJSONFallback: true, BodyIsArray: true})
+	if !strings.Contains(got, "JSON array string") {
+		t.Errorf("expected array-shaped body-json help text, got:\n%s", got)
+	}
+	if strings.Contains(got, "JSON object string") {
+		t.Errorf("array body-json help must not describe an object, got:\n%s", got)
+	}
+}
+
 // TestBodyJSONFallback_RequiredChecks emits no required-flag check
 // because the parser cannot tell whether the request body is mandatory
 // for an opaque schema. An empty body either succeeds or surfaces a
@@ -584,6 +802,27 @@ func TestBodyJSONFallback_BodyMap(t *testing.T) {
 		if !strings.Contains(got, s) {
 			t.Errorf("body-json fallback output missing %q, got:\n%s", s, got)
 		}
+	}
+}
+
+func TestBodyJSONFallback_BodyMap_ArrayBody(t *testing.T) {
+	t.Parallel()
+	got := bodyMapForEndpointVars(spec.Endpoint{BodyJSONFallback: true, BodyIsArray: true}, "\t", "bodyMap", "body")
+	wantSubstrings := []string{
+		`if flagBodyJSON != ""`,
+		`var parsedBodyJSON any`,
+		`json.Unmarshal([]byte(flagBodyJSON), &parsedBodyJSON)`,
+		`asArray, ok := parsedBodyJSON.([]any)`,
+		`body = asArray`,
+		`--body-json must be a JSON array, got JSON %T`,
+	}
+	for _, s := range wantSubstrings {
+		if !strings.Contains(got, s) {
+			t.Errorf("array body-json fallback output missing %q, got:\n%s", s, got)
+		}
+	}
+	if strings.Contains(got, `asMap, ok := parsedBodyJSON.(map[string]any)`) {
+		t.Errorf("array body-json fallback must not force an object map, got:\n%s", got)
 	}
 }
 
@@ -624,14 +863,14 @@ func TestNonJSONBodyMaps_RequiredBoolNoDefaultUsesStringZero(t *testing.T) {
 	t.Parallel()
 	body := []spec.Param{{Name: "all_day", Type: "boolean", Required: true}}
 	multipart := multipartBodyMaps(body, "\t")
-	if !strings.Contains(multipart, `if bodyAllDay != "" {`) {
+	if !strings.Contains(multipart, `if (cmd.Flags().Changed("all-day") || bodyAllDay != "") {`) {
 		t.Errorf("multipart required bool must compare against string zero value, got:\n%s", multipart)
 	}
 	if strings.Contains(multipart, `bodyAllDay != false`) {
 		t.Errorf("multipart required bool must not compare string var to bool false, got:\n%s", multipart)
 	}
 	form := formBodyMaps(body, "\t")
-	if !strings.Contains(form, `if bodyAllDay != "" {`) {
+	if !strings.Contains(form, `if (cmd.Flags().Changed("all-day") || bodyAllDay != "") {`) {
 		t.Errorf("form required bool must compare against string zero value, got:\n%s", form)
 	}
 	if strings.Contains(form, `bodyAllDay != false`) {

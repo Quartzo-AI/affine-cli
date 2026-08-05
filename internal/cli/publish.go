@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/mvanhorn/cli-printing-press/v4/internal/artifacts"
-	catalogpkg "github.com/mvanhorn/cli-printing-press/v4/internal/catalog"
+	"github.com/mvanhorn/cli-printing-press/v4/internal/categories"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/govulncheck"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/naming"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/pipeline"
@@ -85,6 +85,8 @@ type RenameResult struct {
 	FilesModified int    `json:"files_modified"`
 	Error         string `json:"error,omitempty"`
 }
+
+var runValidationForPublishPackage = runValidation
 
 func newPublishRenameCmd() *cobra.Command {
 	var dir string
@@ -240,10 +242,10 @@ func newPublishPackageCmd() *cobra.Command {
 			if strings.Contains(category, "/") || strings.Contains(category, "\\") || strings.Contains(category, "..") {
 				return &ExitError{Code: ExitInputError, Err: fmt.Errorf("--category must be a simple slug (no path separators or '..')")}
 			}
-			if !catalogpkg.IsPublicCategory(category) {
+			if !categories.IsPublic(category) {
 				return &ExitError{
 					Code: ExitInputError,
-					Err:  fmt.Errorf("--category must be one of: %s", strings.Join(catalogpkg.PublicCategories(), ", ")),
+					Err:  fmt.Errorf("--category must be one of: %s", strings.Join(categories.Public(), ", ")),
 				}
 			}
 			if target == "" && dest == "" {
@@ -268,8 +270,40 @@ func newPublishPackageCmd() *cobra.Command {
 				}
 			}
 
+			sourceManifest, _ := pipeline.ReadCLIManifest(dir)
+			preferredRunID := strings.TrimSpace(sourceManifest.RunID)
+			if preferredRunID != "" && !isSafeManuscriptRunID(preferredRunID) {
+				return &ExitError{Code: ExitInputError, Err: fmt.Errorf("manifest run_id must be a single path component")}
+			}
+			sourceCLIName := sourceManifest.CLIName
+			if sourceCLIName == "" {
+				sourceCLIName = filepath.Base(dir)
+			}
+			sourceAPIName := sourceManifest.APIName
+			if sourceAPIName == "" {
+				sourceAPIName = naming.TrimCLISuffix(sourceCLIName)
+			}
+			if !isSafeManuscriptPathComponent(sourceCLIName) || !isSafeManuscriptPathComponent(sourceAPIName) {
+				return &ExitError{Code: ExitInputError, Err: fmt.Errorf("manifest cli_name and api_name must be single path components")}
+			}
+			msDir, runID := findManuscriptsRun(sourceCLIName, sourceAPIName, preferredRunID)
+			embeddedMsDir := filepath.Join(dir, ".manuscripts")
+			if runID == "" && preferredRunID != "" && manuscriptRunExists(filepath.Join(embeddedMsDir, preferredRunID)) {
+				msDir = embeddedMsDir
+				runID = preferredRunID
+			}
+			if runID == "" {
+				msDir, runID = resolveManuscripts(sourceCLIName, sourceAPIName)
+			}
+			if runID == "" {
+				if embeddedRunID, err := findMostRecentRun(embeddedMsDir); err == nil && embeddedRunID != "" {
+					msDir = embeddedMsDir
+					runID = embeddedRunID
+				}
+			}
+
 			// Re-validate before packaging
-			vResult := runValidation(dir)
+			vResult := runPackageValidation(dir, msDir, runID)
 			if !vResult.Passed {
 				if asJSON {
 					enc := json.NewEncoder(os.Stdout)
@@ -361,6 +395,12 @@ func newPublishPackageCmd() *cobra.Command {
 				cleanupOnFailure()
 				return &ExitError{Code: ExitPublishError, Err: fmt.Errorf("normalizing publish metadata: %w", err)}
 			}
+			if runID != "" && runID != sourceManifest.RunID {
+				if err := setPackagedManifestRunID(outCLIDir, runID); err != nil {
+					cleanupOnFailure()
+					return &ExitError{Code: ExitPublishError, Err: fmt.Errorf("updating packaged manifest run_id: %w", err)}
+				}
+			}
 
 			// Strip build/ from the staged tree. autoBundleForHost writes
 			// host-platform .mcpb bundles + staged binaries there as a
@@ -428,13 +468,8 @@ func newPublishPackageCmd() *cobra.Command {
 				ModulePath: modulePath,
 			}
 
-			msDir, runID := resolveManuscripts(cliName, vResult.APIName)
-			if runID == "" {
-				embeddedMsDir := filepath.Join(dir, ".manuscripts")
-				if embeddedRunID, err := findMostRecentRun(embeddedMsDir); err == nil && embeddedRunID != "" {
-					msDir = embeddedMsDir
-					runID = embeddedRunID
-				}
+			if preferredRunID != "" && runID != "" && runID != preferredRunID {
+				fmt.Fprintf(os.Stderr, "warning: manifest manuscripts run %q not found; packaging fallback run %q\n", preferredRunID, runID)
 			}
 			if runID != "" {
 				result.RunID = runID
@@ -456,7 +491,7 @@ func newPublishPackageCmd() *cobra.Command {
 				cleanupOnFailure()
 				return &ExitError{Code: ExitPublishError, Err: fmt.Errorf("reading staged package cookie auth metadata: %w", err)}
 			}
-			findings, err := artifacts.FindPackageSecrets(outCLIDir, cookieNames)
+			secretResult, err := artifacts.FindPackageSecretsWithSuppressions(outCLIDir, cookieNames)
 			if err != nil {
 				cleanupOnFailure()
 				return &ExitError{Code: ExitPublishError, Err: fmt.Errorf("scanning staged package for secret tokens: %w", err)}
@@ -468,9 +503,13 @@ func newPublishPackageCmd() *cobra.Command {
 				return &ExitError{Code: ExitPublishError, Err: fmt.Errorf("scanning staged package for PII: %w", piiErr)}
 			}
 
-			if scanErr := formatCombinedScanError(findings, piiResult.Findings, piiResult.Completion); scanErr != nil {
+			if scanErr := formatCombinedScanError(secretResult.Findings, piiResult.Findings, piiResult.Completion); scanErr != nil {
 				cleanupOnFailure()
 				return &ExitError{Code: ExitPublishError, Err: scanErr}
+			}
+			if err := recordReviewedSecretSuppressions(outCLIDir, secretResult.Suppressions); err != nil {
+				cleanupOnFailure()
+				return &ExitError{Code: ExitPublishError, Err: fmt.Errorf("recording reviewed secret suppressions: %w", err)}
 			}
 
 			// Success — remove stashed old CLI dirs
@@ -659,6 +698,68 @@ func resolveManuscripts(cliName, apiName string) (msDir string, runID string) {
 	}
 	// 3. Fuzzy resolve (strip suffixes, prefix match)
 	return resolveManuscriptDir(msRoot, apiName)
+}
+
+func findManuscriptsRun(cliName, apiName, runID string) (msDir string, foundRunID string) {
+	if runID == "" {
+		return "", ""
+	}
+	if apiName == "" {
+		apiName = naming.TrimCLISuffix(cliName)
+	}
+
+	msRoot := pipeline.PublishedManuscriptsRoot()
+	for _, dir := range []string{filepath.Join(msRoot, apiName), filepath.Join(msRoot, cliName)} {
+		if manuscriptRunExists(filepath.Join(dir, runID)) {
+			return dir, runID
+		}
+	}
+	if dir, _ := resolveManuscriptDir(msRoot, apiName); dir != "" && manuscriptRunExists(filepath.Join(dir, runID)) {
+		return dir, runID
+	}
+	return "", ""
+}
+
+func manuscriptRunExists(dir string) bool {
+	info, err := os.Stat(dir)
+	return err == nil && info.IsDir()
+}
+
+func isSafeManuscriptRunID(runID string) bool {
+	return isSafeManuscriptPathComponent(runID)
+}
+
+func isSafeManuscriptPathComponent(value string) bool {
+	return value != "" && value != "." && value != ".." && !filepath.IsAbs(value) &&
+		!strings.ContainsAny(value, `/\\`)
+}
+
+func runPackageValidation(dir, selectedManuscriptsDir, selectedRunID string) ValidateResult {
+	result := runValidationForPublishPackage(dir)
+	if selectedRunID == "" {
+		return result
+	}
+	manifest, err := pipeline.ReadCLIManifest(dir)
+	if err != nil {
+		return result
+	}
+	manifest.RunID = selectedRunID
+	for i := range result.Checks {
+		if result.Checks[i].Name != "phase5" {
+			continue
+		}
+		proofsDir := filepath.Join(selectedManuscriptsDir, selectedRunID, "proofs")
+		result.Checks[i] = checkPhase5GateAt(proofsDir, manifest, dir)
+		result.Passed = true
+		for _, check := range result.Checks {
+			if !check.Passed {
+				result.Passed = false
+				break
+			}
+		}
+		break
+	}
+	return result
 }
 
 func runValidation(dir string) ValidateResult {
@@ -890,19 +991,19 @@ func manifestWithPublishAttributionFallbacks(manifest pipeline.CLIManifest) pipe
 	// creator-only manifest (manual edit or future creator-primary state)
 	// validates without needing a git identity (e.g. on CI).
 	if manifest.Creator != nil && !manifest.Creator.IsZero() {
-		if strings.TrimSpace(manifest.Printer) == "" {
+		if isMissingPublishPrinterField(manifest.Printer) {
 			manifest.Printer = manifest.Creator.Handle
 		}
-		if strings.TrimSpace(manifest.PrinterName) == "" {
+		if isMissingPublishPrinterNameField(manifest.PrinterName) {
 			manifest.PrinterName = manifest.Creator.Name
 		}
 	}
-	if strings.TrimSpace(manifest.Printer) == "" || strings.TrimSpace(manifest.PrinterName) == "" {
+	if isMissingPublishPrinterField(manifest.Printer) || isMissingPublishPrinterNameField(manifest.PrinterName) {
 		fallback := resolvePublishAttributionFallback(manifest)
-		if strings.TrimSpace(manifest.Printer) == "" && fallback.Printer != "" {
+		if isMissingPublishPrinterField(manifest.Printer) && fallback.Printer != "" {
 			manifest.Printer = fallback.Printer
 		}
-		if strings.TrimSpace(manifest.PrinterName) == "" && fallback.PrinterName != "" {
+		if isMissingPublishPrinterNameField(manifest.PrinterName) && fallback.PrinterName != "" {
 			manifest.PrinterName = fallback.PrinterName
 		}
 	}
@@ -926,10 +1027,12 @@ type publishAttributionFallback struct {
 func resolvePublishAttributionFallback(manifest pipeline.CLIManifest) publishAttributionFallback {
 	printer := strings.TrimSpace(manifest.Printer)
 	printerName := strings.TrimSpace(manifest.PrinterName)
-	if printer != "" && printerName == "" {
+	printerMissing := isMissingPublishPrinterField(printer)
+	printerNameMissing := isMissingPublishPrinterNameField(printerName)
+	if !printerMissing && printerNameMissing {
 		return publishAttributionFallback{PrinterName: resolveGitHubUserName(printer)}
 	}
-	if printer == "" && printerName == "" {
+	if printerMissing {
 		return resolveCurrentPublishAttributionFallback()
 	}
 	return publishAttributionFallback{}
@@ -1037,8 +1140,8 @@ func backfillPackagedManifestAttribution(dir string) error {
 		return err
 	}
 	fallback := resolvePublishAttributionFallback(manifest)
-	needsPrinter := strings.TrimSpace(manifest.Printer) == ""
-	needsPrinterName := strings.TrimSpace(manifest.PrinterName) == ""
+	needsPrinter := isMissingPublishPrinterField(manifest.Printer)
+	needsPrinterName := isMissingPublishPrinterNameField(manifest.PrinterName)
 	if needsPrinter && fallback.Printer == "" {
 		return fmt.Errorf("printer attribution is missing and no fallback could be resolved")
 	}
@@ -1112,11 +1215,71 @@ func normalizePackagedPublishMetadata(dir, category string) error {
 		}
 	}
 
+	if err := removeEmptyReleaseManifest(dir); err != nil {
+		return err
+	}
 	return pipeline.EnsurePatchesDir(dir)
+}
+
+func setPackagedManifestRunID(dir, runID string) error {
+	manifestPath := filepath.Join(dir, pipeline.CLIManifestFilename)
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(runID)
+	if err != nil {
+		return err
+	}
+	raw["run_id"] = encoded
+	updated, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	updated = append(updated, '\n')
+	info, err := os.Stat(manifestPath)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(manifestPath, updated, info.Mode())
 }
 
 func isPublishPrinterSentinel(printer string) bool {
 	return printer == "USER" || printer == "user"
+}
+
+func isMissingPublishPrinterField(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return trimmed == "" || isPublishPrinterSentinel(trimmed)
+}
+
+func isMissingPublishPrinterNameField(value string) bool {
+	return isMissingPublishPrinterField(value)
+}
+
+func removeEmptyReleaseManifest(dir string) error {
+	path := filepath.Join(dir, pipeline.CLIReleaseManifestFilename)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var release pipeline.CLIReleaseManifest
+	if err := json.Unmarshal(data, &release); err != nil {
+		return fmt.Errorf("parsing %s: %w", pipeline.CLIReleaseManifestFilename, err)
+	}
+	if strings.TrimSpace(release.Version) != "" ||
+		strings.TrimSpace(release.ReleasedAt) != "" ||
+		strings.TrimSpace(release.SourceCommit) != "" {
+		return nil
+	}
+	return os.Remove(path)
 }
 
 func manifestAdvertisesMCP(manifest pipeline.CLIManifest) bool {
@@ -1131,8 +1294,11 @@ func checkPhase5Gate(dir string, manifest pipeline.CLIManifest) CheckResult {
 		return CheckResult{Name: "phase5", Passed: false, Error: "manifest missing run_id; cannot locate Phase 5 gate proof"}
 	}
 
-	proofsDir := phase5ProofsDir(dir, manifest)
-	result := pipeline.ValidatePhase5Gate(proofsDir, manifest)
+	return checkPhase5GateAt(phase5ProofsDir(dir, manifest), manifest, dir)
+}
+
+func checkPhase5GateAt(proofsDir string, manifest pipeline.CLIManifest, sourceDir string) CheckResult {
+	result := pipeline.ValidatePhase5Gate(proofsDir, manifest, sourceDir)
 	if !result.Passed {
 		return CheckResult{Name: "phase5", Passed: false, Error: result.Detail}
 	}
@@ -1145,11 +1311,11 @@ func phase5ProofsDir(dir string, manifest pipeline.CLIManifest) string {
 		filepath.Join(dir, ".manuscripts", runID, "proofs"),
 	}
 	msRoot := pipeline.PublishedManuscriptsRoot()
-	if manifest.CLIName != "" {
-		candidates = append(candidates, filepath.Join(msRoot, manifest.CLIName, runID, "proofs"))
-	}
 	if manifest.APIName != "" {
 		candidates = append(candidates, filepath.Join(msRoot, manifest.APIName, runID, "proofs"))
+	}
+	if manifest.CLIName != "" {
+		candidates = append(candidates, filepath.Join(msRoot, manifest.CLIName, runID, "proofs"))
 	}
 	for _, candidate := range candidates {
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
@@ -1354,8 +1520,12 @@ func stagedBinaryNames(cliName, apiSlug string) []string {
 	}
 	add(apiSlug)
 	add(cliName)
+	if cliName != "" {
+		add(cliName + "-dogfood")
+	}
 	if apiSlug != "" {
 		add(apiSlug + "-pp-cli")
+		add(apiSlug + "-pp-cli-dogfood")
 		add(apiSlug + "-pp-mcp")
 	}
 	return names
@@ -1502,6 +1672,20 @@ func stagedPackageCookieNames(dir string) ([]string, error) {
 	default:
 		return nil, nil
 	}
+}
+
+func recordReviewedSecretSuppressions(dir string, suppressions []artifacts.ReviewedSecretSuppression) error {
+	manifestSuppressions := make([]pipeline.ReviewedSecretSuppression, 0, len(suppressions))
+	for _, suppression := range suppressions {
+		manifestSuppressions = append(manifestSuppressions, pipeline.ReviewedSecretSuppression{
+			Path:        suppression.Path,
+			Line:        suppression.Line,
+			Kind:        suppression.Kind,
+			Fingerprint: suppression.Fingerprint,
+			Reason:      suppression.Reason,
+		})
+	}
+	return pipeline.WriteReviewedSecretSuppressions(dir, manifestSuppressions)
 }
 
 // formatCombinedScanError composes the publish-time error message from

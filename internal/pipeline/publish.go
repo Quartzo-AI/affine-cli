@@ -12,13 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mvanhorn/cli-printing-press/v4/catalog"
-	catalogpkg "github.com/mvanhorn/cli-printing-press/v4/internal/catalog"
-	"github.com/mvanhorn/cli-printing-press/v4/internal/catalogmeta"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/graphql"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/naming"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/openapi"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/spec"
+	"github.com/mvanhorn/cli-printing-press/v4/internal/specmeta"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/version"
 	"gopkg.in/yaml.v3"
 )
@@ -211,7 +209,9 @@ func writeCLIManifestForPublish(state *PipelineState, dir string) error {
 	// parsing is unavailable or lossy for the original spec format. NovelFeatures
 	// is carried forward as a defensive fallback in case research.json is absent;
 	// when both are available, research.json wins as the post-dogfood source of truth.
+	var existingRaw map[string]json.RawMessage
 	if existingData, err := os.ReadFile(filepath.Join(dir, CLIManifestFilename)); err == nil {
+		_ = json.Unmarshal(existingData, &existingRaw)
 		var existing CLIManifest
 		if json.Unmarshal(existingData, &existing) == nil {
 			if state.RunID == "" && existing.RunID != "" {
@@ -242,9 +242,6 @@ func writeCLIManifestForPublish(state *PipelineState, dir string) error {
 			// publish-time transient state).
 			if (m.Creator == nil || m.Creator.IsZero()) && (strings.TrimSpace(m.Printer) != "" || strings.TrimSpace(m.PrinterName) != "") {
 				m.Creator = &spec.Person{Handle: strings.TrimSpace(m.Printer), Name: strings.TrimSpace(m.PrinterName)}
-			}
-			if existing.CatalogEntry != "" {
-				m.CatalogEntry = existing.CatalogEntry
 			}
 			if existing.Category != "" {
 				m.Category = existing.Category
@@ -283,22 +280,6 @@ func writeCLIManifestForPublish(state *PipelineState, dir string) error {
 		}
 	}
 
-	// Catalog metadata must be present before parsing refreshes display_name:
-	// explicit spec display_name wins, but OpenAPI info.title-derived fallback
-	// should not clobber curated catalog display_name.
-	if entry, err := catalogpkg.LookupFS(catalog.FS, state.APIName); err == nil {
-		m.CatalogEntry = entry.Name
-		m.Category = entry.Category
-		m.Regions = append([]string(nil), entry.Regions...)
-		m.APILanguage = entry.APILanguage
-		if m.Description == "" {
-			m.Description = entry.Description
-		}
-		if entry.DisplayName != "" {
-			m.DisplayName = entry.DisplayName
-		}
-	}
-
 	// Detect spec format and compute checksum from the spec file archived
 	// alongside the CLI. generate writes spec.json for JSON inputs and
 	// spec.yaml for YAML inputs; --docs / --plan runs leave no archive and
@@ -325,7 +306,7 @@ func writeCLIManifestForPublish(state *PipelineState, dir string) error {
 			parsed, parseErr = spec.ParseBytes(data)
 		}
 		if parseErr == nil {
-			applyPublishCatalogMetadata(parsed, state.APIName)
+			applyPublishSpecMetadata(parsed, state.APIName)
 			populateMCPMetadata(&m, parsed)
 			if m.Description == "" {
 				m.Description = naming.CompactDescription(parsed.Description)
@@ -338,12 +319,9 @@ func writeCLIManifestForPublish(state *PipelineState, dir string) error {
 			m.Description = archivedSpecDescription(data)
 		}
 
-		// Fall back to spec.Category for synthetic CLIs not in the embedded
-		// catalog (mirrors the same fallback in WriteManifestForGenerate).
-		// The catalog lookup earlier in this function only fires for
-		// catalog-listed APIs; synthetic CLIs would otherwise lose the
-		// spec's category at publish time and break verify-skill's
-		// canonical-sections check.
+		// Fall back to spec.Category so CLIs keep their category at publish
+		// time and verify-skill's canonical-sections check stays aligned with
+		// the rendered README/SKILL install block.
 		if m.Category == "" && parsed != nil && parsed.Category != "" {
 			m.Category = parsed.Category
 		}
@@ -423,7 +401,14 @@ func writeCLIManifestForPublish(state *PipelineState, dir string) error {
 		}
 	}
 
-	return WriteCLIManifest(dir, m)
+	clearFields := map[string]struct{}{}
+	if m.SpecURL != "" && m.SpecPath == "" {
+		clearFields["spec_path"] = struct{}{}
+	}
+	if m.SpecPath != "" && m.SpecURL == "" {
+		clearFields["spec_url"] = struct{}{}
+	}
+	return writeCLIManifestPreservingRawFields(dir, m, existingRaw, clearFields)
 }
 
 func archivedSpecDescription(data []byte) string {
@@ -436,21 +421,15 @@ func archivedSpecDescription(data []byte) string {
 	return naming.CompactDescription(probe.Description)
 }
 
-func applyPublishCatalogMetadata(parsed *spec.APISpec, apiName string) {
+func applyPublishSpecMetadata(parsed *spec.APISpec, apiName string) {
 	if parsed == nil || apiName == "" {
 		return
 	}
 	priorName := parsed.Name
 	if priorName != "" && priorName != apiName {
-		catalogmeta.RebaseAuthEnvPrefix(&parsed.Auth, priorName, apiName)
+		specmeta.RebaseAuthEnvPrefix(&parsed.Auth, priorName, apiName)
 	}
 	parsed.Name = apiName
-
-	entry, err := catalogpkg.LookupFS(catalog.FS, apiName)
-	if err != nil {
-		return
-	}
-	catalogmeta.ApplyRuntimeMetadata(parsed, entry)
 }
 
 // loadResearchForPromote returns the research.json relevant to the
@@ -671,6 +650,9 @@ func shouldSkipPublishableManuscriptFile(path string, info fs.FileInfo, opts Pub
 	if !info.IsDir() && info.Size() >= publishableManuscriptMaxCaptureBytes {
 		return true
 	}
+	if strings.HasSuffix(strings.ToLower(filepath.Base(path)), ".pre-pii-scrub") {
+		return true
+	}
 	if opts.IncludeRawCaptures {
 		return false
 	}
@@ -689,7 +671,9 @@ func isRawBrowserSniffCapture(path string, info fs.FileInfo) bool {
 	parentPath := filepath.Dir(clean)
 
 	if pathHasComponent(parentPath, "discovery") {
-		if matched, _ := filepath.Match("probe-*.json", base); matched {
+		hyphenated, _ := filepath.Match("probe-*.json", base)
+		underscored, _ := filepath.Match("probe_*.json", base)
+		if hyphenated || underscored {
 			return true
 		}
 	}

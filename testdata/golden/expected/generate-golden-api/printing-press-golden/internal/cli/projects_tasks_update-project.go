@@ -13,6 +13,7 @@ import (
 )
 
 func newProjectsTasksUpdateProjectCmd(flags *rootFlags) *cobra.Command {
+	var flagXApiVersion string
 	var flagNotify bool
 	var bodyCompleted bool
 	var bodyPriority string
@@ -20,33 +21,54 @@ func newProjectsTasksUpdateProjectCmd(flags *rootFlags) *cobra.Command {
 	var stdinBody bool
 
 	cmd := &cobra.Command{
-		Use:         "update-project <projectId> <taskId>",
-		Aliases:     []string{"update"},
-		Short:       "Update project task",
-		Example:     "  printing-press-golden-pp-cli projects tasks update-project 550e8400-e29b-41d4-a716-446655440000 550e8400-e29b-41d4-a716-446655440000",
+		Use:     "update-project <projectId> <taskId>",
+		Aliases: []string{"update"},
+		Short:   "Update project task",
+		// TODO: replace placeholder example values before relying on this for live dogfood.
+		Example:     "  printing-press-golden-pp-cli projects tasks update-project 550e8400-e29b-41d4-a716-446655440000 550e8400-e29b-41d4-a716-446655440000 --x-api-version example-value",
 		Annotations: map[string]string{"pp:endpoint": "tasks.update-project", "pp:method": "PATCH", "pp:path": "/projects/{projectId}/tasks/{taskId}"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				// A missing required positional is a usage error in every output
+				// mode (matches command_promoted.go.tmpl). Machine callers
+				// (--json/--agent) also get a JSON error envelope on stdout;
+				// usageErr sets exit 2.
+				if flags.asJSON {
+					if printErr := printJSONFiltered(cmd.OutOrStdout(), map[string]any{
+						"error": "missing required argument",
+						"usage": fmt.Sprintf("%s%s", cmd.CommandPath(), " <projectId> <taskId>"),
+					}, flags); printErr != nil {
+						return printErr
+					}
+				}
+				return usageErr(fmt.Errorf("missing required argument\nUsage: %s%s", cmd.CommandPath(), " <projectId> <taskId>"))
 			}
 			if !stdinBody {
 			}
+			path := "/projects/{projectId}/tasks/{taskId}"
+			if len(args) < 1 || args[0] == "" {
+				return usageErr(fmt.Errorf("projectId is required\nUsage: %s <%s>", cmd.CommandPath(), "projectId"))
+			}
+			path = replacePathParam(path, "projectId", args[0])
+			if len(args) < 2 || args[1] == "" {
+				return usageErr(fmt.Errorf("taskId is required\nUsage: %s <%s>", cmd.CommandPath(), "taskId"))
+			}
+			path = replacePathParam(path, "taskId", args[1])
 			c, err := flags.newClient()
 			if err != nil {
 				return err
 			}
+			headerOverrides := map[string]string{}
 
-			path := "/projects/{projectId}/tasks/{taskId}"
-			path = replacePathParam(path, "projectId", args[0])
-			if len(args) < 2 {
-				return usageErr(fmt.Errorf("taskId is required\nUsage: %s <%s>", cmd.CommandPath(), "taskId"))
+			if cmd.Flags().Changed("x-api-version") || flagXApiVersion != "" {
+				headerOverrides["X-Api-Version"] = formatCLIParamValue(flagXApiVersion)
 			}
-			path = replacePathParam(path, "taskId", args[1])
+
 			params := map[string]string{}
-			if flagNotify != false {
+			if cmd.Flags().Changed("notify") || flagNotify != false {
 				params["notify"] = formatCLIParamValue(flagNotify)
 			}
-			var body map[string]any
+			var body any
 			if stdinBody {
 				stdinData, err := io.ReadAll(os.Stdin)
 				if err != nil {
@@ -58,18 +80,19 @@ func newProjectsTasksUpdateProjectCmd(flags *rootFlags) *cobra.Command {
 				}
 				body = jsonBody
 			} else {
-				body = map[string]any{}
+				bodyMap := map[string]any{}
+				body = bodyMap
 				if cmd.Flags().Changed("completed") {
-					body["completed"] = bodyCompleted
+					bodyMap["completed"] = bodyCompleted
 				}
-				if bodyPriority != "" {
-					body["priority"] = bodyPriority
+				if cmd.Flags().Changed("priority") || bodyPriority != "" {
+					bodyMap["priority"] = bodyPriority
 				}
-				if bodyTitle != "" {
-					body["title"] = bodyTitle
+				if cmd.Flags().Changed("title") || bodyTitle != "" {
+					bodyMap["title"] = bodyTitle
 				}
 			}
-			data, statusCode, err := c.PatchWithParams(cmd.Context(), path, params, body)
+			data, statusCode, err := c.PatchWithParamsAndHeaders(cmd.Context(), path, params, body, headerOverrides)
 			if err != nil {
 				return classifyAPIError(err, flags)
 			}
@@ -136,6 +159,9 @@ func newProjectsTasksUpdateProjectCmd(flags *rootFlags) *cobra.Command {
 					"status":   statusCode,
 					"success":  statusCode >= 200 && statusCode < 300 && (partialFailure == nil || flags.allowPartialFailure),
 				}
+				if flags.agent {
+					envelope["meta"] = map[string]any{"source": "live"}
+				}
 				if partialFailure != nil {
 					envelope["partial_failure"] = partialFailure
 				}
@@ -174,14 +200,26 @@ func newProjectsTasksUpdateProjectCmd(flags *rootFlags) *cobra.Command {
 				if len(filtered) > 0 {
 					var parsed any
 					if err := json.Unmarshal(filtered, &parsed); err == nil {
-						envelope["data"] = parsed
+						if flags.agent {
+							envelope["results"] = parsed
+						} else {
+							envelope["data"] = parsed
+						}
 					}
 				}
 				envelopeJSON, err := json.Marshal(envelope)
 				if err != nil {
 					return err
 				}
-				if perr := printOutput(cmd.OutOrStdout(), json.RawMessage(envelopeJSON), true); perr != nil {
+				resultKey := "data"
+				if flags.agent {
+					resultKey = "results"
+				}
+				structured, err := wrapPlatformStructuredOutput(json.RawMessage(envelopeJSON), flags, resultKey, true)
+				if err != nil {
+					return err
+				}
+				if perr := printOutput(cmd.OutOrStdout(), structured, true); perr != nil {
 					return perr
 				}
 				if partialFailure != nil && !flags.allowPartialFailure {
@@ -205,6 +243,7 @@ func newProjectsTasksUpdateProjectCmd(flags *rootFlags) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&flagXApiVersion, "x-api-version", "2026-04-01", "Required API version header.")
 	cmd.Flags().BoolVar(&flagNotify, "notify", false, "Notify")
 	cmd.Flags().BoolVar(&bodyCompleted, "completed", false, "Completed")
 	cmd.Flags().StringVar(&bodyPriority, "priority", "", "Priority")

@@ -2,7 +2,7 @@
 name: printing-press-retro
 description: >
   Run a retrospective after generating a CLI. Identifies systemic improvements
-  to the Printing Press — templates, Go binary, skill instructions, catalog —
+  to the Printing Press — templates, Go binary, skill instructions, and workflow docs —
   so the next CLI comes out better. Creates a GitHub issue with actionable
   findings when there are Printing Press fixes to make.
   Use after any /printing-press run.
@@ -18,12 +18,13 @@ allowed-tools:
   - Write
   - Agent
   - AskUserQuestion
+created_by: user
 ---
 
 # /printing-press-retro
 
 Analyze a Printing Press session to find ways to improve the system that produces
-CLIs — the Go binary, templates, skills, and catalog. Not fixes to the specific CLI
+CLIs — the Go binary, templates, skills, and workflow docs. Not fixes to the specific CLI
 that was just printed, but improvements so the *next* CLI comes out stronger.
 
 **It is a non-goal for the Printing Press to produce flawless CLIs without manual
@@ -414,6 +415,28 @@ the Do/Skip tables, they go on the dropped-candidates list with the reason.
 | **Discovered optimization** | Improvement found during use |
 | **Skill instruction gap** | Skill told Claude wrong thing or missed a step |
 
+### Actionable issue type mapping
+
+Every actionable work unit must carry exactly one real GitHub issue type label:
+`bug` or `enhancement`. Derive it deterministically from the absorbed finding
+categories:
+
+| Finding category | Issue type |
+|------------------|------------|
+| Bug | `bug` |
+| Scorer bug | `bug` |
+| Assumption mismatch | `bug` |
+| Default gap | `bug` |
+| Template gap | `enhancement` |
+| Recurring friction | `enhancement` |
+| Missing scaffolding | `enhancement` |
+| Discovered optimization | `enhancement` |
+| Skill instruction gap | `enhancement` |
+
+If a work unit absorbs multiple findings, `bug` wins when any absorbed category
+maps to `bug`; otherwise use `enhancement`. Priority, component, provenance,
+and routing/terminal labels are not substitutes for this type label.
+
 **4. Where in the Printing Press does this originate?**
 
 Pick exactly one component. The `slug` column drives the `comp:<slug>` label
@@ -425,7 +448,6 @@ work across retros (`gh issue list --label comp:<slug>`).
 | Generator templates | `generator` | `internal/generator/` |
 | Spec parser | `spec-parser` | `internal/spec/` |
 | OpenAPI parser | `openapi-parser` | `internal/openapi/` |
-| Catalog | `catalog` | `catalog/` |
 | Main skill | `skill` | `skills/printing-press/SKILL.md` |
 | Verify/dogfood/scorecard | `scorer` | CLI commands |
 
@@ -437,9 +459,9 @@ fix lands. Don't multi-label.
 **Step A: Cross-API stress test.** Test across API shapes (standard REST, proxy-envelope,
 RPC-style) and input methods (OpenAPI, crowd-sniffed, HAR-sniffed, no spec).
 
-**Step B: Name three concrete APIs from the catalog with direct evidence.** Not "every
+**Step B: Name three concrete APIs from the library with direct evidence.** Not "every
 API with multi-word resources" or "any browser-sniffed CLI." Name three specific APIs
-already in `$PRESS_LIBRARY/` (or the embedded `catalog/` directory) where you
+already in `$PRESS_LIBRARY/` or the public Printing Press Library where you
 can point to evidence the pattern exists: a path in their spec, a known endpoint shape,
 a header the vendor documents, an output you can reproduce. "Stripe, Notion, GitHub
 probably have this" is hand-waving; "Stripe (Stripe-Version header in spec line N),
@@ -583,7 +605,7 @@ Write the full retro document using this template:
 
 ## Session Stats
 - API: <name>
-- Spec source: <catalog/browser-sniffed/docs/HAR>
+- Spec source: <public-library/browser-sniffed/docs/HAR>
 - Scorecard: <score>/100 (<grade>)
 - Verify pass rate: <X>%
 - Fix loops: <N>
@@ -708,10 +730,14 @@ For each "Do" finding or group of related findings:
 
 ```markdown
 ### WU-1: <Title> (from F1, F3, ...)
+- **Stable ID:** WU-1 *(preserve this identifier when sorting; dependency edges
+  use the stable ID rather than a post-sort array position)*
 - **Priority:** P1 / P2 / P3 *(max priority among absorbed findings — P1 if any
   absorbed finding is P1, else P2 if any is P2, else P3)*
-- **Component:** generator / openapi-parser / spec-parser / scorer / skill / catalog
-  *(must match one of the six fixed component slugs; drives the `comp:*` label
+- **Type:** bug / enhancement *(use the deterministic category mapping above;
+  `bug` wins for a mixed work unit)*
+- **Component:** generator / openapi-parser / spec-parser / scorer / skill
+  *(must match one of the five fixed component slugs; drives the `comp:*` label
   applied to the issue when filed)*
 - **Goal:** One sentence describing the outcome
 - **Target:** <component and area, e.g., "Generator templates in internal/generator/">
@@ -719,14 +745,20 @@ For each "Do" finding or group of related findings:
   - positive test: ...
   - negative test: ...
 - **Scope boundary:** What this does NOT include
-- **Dependencies:** Other work units that must complete first
+- **Dependencies:** None, unless another work unit or issue is a real
+  prerequisite. Explicit prerequisites become native GitHub `blocked-by` /
+  `blocking` relationships after issue numbers are known. Encode work-unit
+  edges as `WU-2|wu:WU-1` (dependent stable ID first); existing issues use
+  `WU-2|issue:123`. The executor validates that every WU ID is known and
+  resolves both endpoints by stable ID after priority sorting. Related-area
+  context stays prose in `Related issues`.
 - **Complexity:** small / medium / large
 ```
 
-The six fixed component slugs are: `generator` (`internal/generator/`),
+The five fixed component slugs are: `generator` (`internal/generator/`),
 `openapi-parser` (`internal/openapi/`), `spec-parser` (`internal/spec/`),
-`scorer` (verify / dogfood / scorecard), `skill` (`skills/printing-press/SKILL.md`),
-`catalog` (`catalog/`). If a WU genuinely spans two, pick the **primary** one — the
+`scorer` (verify / dogfood / scorecard), and `skill` (`skills/printing-press/SKILL.md`).
+If a WU genuinely spans two, pick the **primary** one — the
 component where the durable fix will land. Pick exactly one; don't multi-label.
 
 **If running from inside the printing-press repo (`IN_REPO=true`):**
@@ -784,7 +816,7 @@ This is both the review target and the upload source.
 Before showing the confirm prompt, run `references/issue-template.md`
 **Steps 1, 2, and 2.5** to ensure labels exist, sort the work units, and
 compute the per-WU filing plan via the dedup scan against open
-retro-tagged issues. Each WU ends up classified as either:
+`source:retro` or legacy `retro` issues. Each WU ends up classified as either:
 
 - **File new** — no matching open issue
 - **Comment on #N** — Step 2.5 found a `same` match; the new evidence will be added as a comment instead of filing a duplicate
@@ -805,13 +837,16 @@ confirmation via `AskUserQuestion`.
 >
 > | # | Title | Plan | Notes |
 > |---|-------|------|-------|
-> | 1 | <wu-1 title> | File new (P1, comp:<slug>) | No match |
+> | 1 | <wu-1 title> | File new (P1, bug, comp:<slug>) | No match |
 > | 2 | <wu-2 title> | Comment on #234 | Matches "<existing title>" |
 > | 3 | <wu-3 title> | File new + reference #189 | Adjacent open issue |
 >
-> Each new issue carries `retro`, `priority:P<n>`, `comp:<slug>` labels —
-> agents filter related work across retros with `gh issue list --label
-> comp:<slug>` or `gh issue list --label priority:P1`.
+> Each new issue carries `source:retro`, the mapped `bug` or `enhancement` type,
+> `priority:P<n>`, and `comp:<slug>` labels — agents filter related work across
+> retros with `gh issue list --label source:retro`, `gh issue list --label
+> comp:<slug>`, or `gh issue list --label priority:P1`. During the label cutover,
+> legacy `retro` issues remain discoverable and a write may use `retro` only when
+> the canonical `source:retro` label is not available.
 >
 > Scrubbed artifact zips uploaded to catbox.moe and linked from each new issue:
 >   - **Retro document** — full triage rationale, drops, skips, what went right
@@ -844,8 +879,9 @@ Run artifact-packaging.md Step 5 (the catbox upload) using the zips already in
 ### Step 4: Execute the filing plan
 
 Steps 1, 2, and 2.5 of [references/issue-template.md](references/issue-template.md)
-already ran during Step 2 (filing plan + confirm), so labels exist, WUs are
-sorted, and `$WU_DEDUP` and `$WU_RELATED` are populated. This step runs
+already ran during Step 2 (filing plan + confirm), so labels exist, the safe
+provenance marker is selected, WUs are sorted, and `$WU_DEDUP`, `$WU_RELATED`,
+and `$WU_DEPENDENCY_EDGES` are populated. This step runs
 **Step 3** of the reference: build bodies and execute the plan in parallel.
 
 The "Execution principles" block at the top of `issue-template.md` is
@@ -857,10 +893,14 @@ round trip's worth of network time, not a serialized stack of them.
 
 Each WU is independent: WUs marked `comment:#N` get a comment on the
 existing issue; WUs marked file-new create a new flat top-level issue. No
-parent, no sub-issue REST linking — every new issue stands alone in
-GitHub's issue list with its own open/close lifecycle.
+parent or sub-issue hierarchy — every new issue stands alone in GitHub's issue
+list with its own open/close lifecycle. Explicit prerequisites are applied as
+native `blocked-by`/`blocking` relationships after issue numbers are known;
+ordinary related-area references remain prose.
 
-Each new issue carries its own `priority:P<n>` and `comp:<slug>` labels.
+Each new issue carries its own provenance marker (`source:retro`, or legacy
+`retro` only when the canonical label is unavailable), exactly one mapped
+`bug`/`enhancement` type, `priority:P<n>`, and `comp:<slug>` labels.
 This is what enables `gh issue list --label comp:openapi-parser` to surface
 every retro WU in that area across every retro — labels are the cross-retro
 discovery surface, not auto-cross-links inside issue bodies.
@@ -872,8 +912,9 @@ Each new issue body's **Related issues** block combines:
 
 Both reach across separate filed work where the `#N` auto-cross-link is
 real signal. The body does *not* auto-cross-link to sibling WUs in the
-same retro; that linkage is noise unless one is genuinely a prerequisite
-(captured as free-text `Dependencies:` instead).
+same retro; that linkage is noise unless one is genuinely a prerequisite,
+which is captured in `Dependencies:` and applied natively rather than left as
+prose alone.
 
 If `gh` is not authenticated or every per-WU action fails, follow the
 graceful degradation path in the issue-template reference: save locally and
@@ -911,9 +952,11 @@ filed work, but the shape differs.
 >   - [P1] <title> → comment on #234 — <comment URL>
 >   - ...
 >
-> <N> findings across <M> work units. New issues are tagged with `comp:<slug>`
-> and `priority:P<n>` labels — agents can filter related work across retros
-> with `gh issue list --label comp:<slug>` or `gh issue list --label priority:P1`.
+> <N> findings across <M> work units. New issues are tagged with `source:retro`,
+> their mapped `bug` or `enhancement` type, `comp:<slug>`, and `priority:P<n>`
+> labels — agents can filter related work across retros with `gh issue list
+> --label source:retro`, `gh issue list --label comp:<slug>`, or `gh issue list
+> --label priority:P1`.
 > *(if artifacts uploaded)* Artifacts: [retro doc](<URL>) · [manuscripts](<URL>) · [CLI source](<URL>)
 > Local copy: <$RETRO_SCRATCH_PATH>
 
@@ -952,7 +995,7 @@ Run artifact-packaging.md Step 7 to delete `$STAGING_DIR`.
 - Be honest about what went well. Protecting good patterns matters.
 - **Default is don't-file.** Bias toward filing only when Phase 3 Step B gave you
   three concrete cross-API examples *with evidence* (not speculation), and the
-  Step G case-against was clearly weaker than the case-for. "20% of catalog"
+  Step G case-against was clearly weaker than the case-for. "20% of the library"
   without named APIs is optimism. "Every API has multi-word resources" is
   hand-waving. The retro is a filter, not a wishlist; an issue overloaded
   with weak findings wastes maintainer attention.

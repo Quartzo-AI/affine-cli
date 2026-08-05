@@ -3,6 +3,7 @@ package profiler
 import (
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"regexp"
 	"slices"
@@ -42,13 +43,15 @@ type DomainSignals struct {
 
 // PaginationProfile describes the detected pagination patterns across the API.
 type PaginationProfile struct {
-	CursorParam     string `json:"cursor_param"`      // most common cursor param name (after, cursor, page_token, offset)
-	CursorType      string `json:"cursor_type"`       // most common paginator class (cursor, page_token, offset, page, id_walk); drives runtime iteration strategy
-	PageSizeParam   string `json:"page_size_param"`   // most common page size param (limit, per_page, page_size, first)
-	SinceParam      string `json:"since_param"`       // temporal filter param (since, updated_after, modified_since)
-	DateRangeParam  string `json:"date_range_param"`  // date-range filter param (dates, date_range, dateRange)
-	ItemsKey        string `json:"items_key"`         // response array key (data, results, items, or "" for root array)
-	DefaultPageSize int    `json:"default_page_size"` // detected or default 100
+	CursorParam     string `json:"cursor_param"`         // most common cursor param name (after, cursor, page_token, offset)
+	CursorType      string `json:"cursor_type"`          // most common paginator class (cursor, page_token, offset, page, id_walk); drives runtime iteration strategy
+	PageSizeParam   string `json:"page_size_param"`      // most common page size param (limit, per_page, page_size, first)
+	SinceParam      string `json:"since_param"`          // temporal filter param (since, updated_after, modified_since)
+	SortParam       string `json:"sort_param,omitempty"` // sort parameter used to request ascending last-modified order
+	SortValue       string `json:"sort_value,omitempty"` // value that requests ascending last-modified order
+	DateRangeParam  string `json:"date_range_param"`     // date-range filter param (dates, date_range, dateRange)
+	ItemsKey        string `json:"items_key"`            // response array key (data, results, items, or "" for root array)
+	DefaultPageSize int    `json:"default_page_size"`    // detected or default 100
 }
 
 // SearchBodyField describes an additional body field needed for POST search endpoints.
@@ -133,6 +136,20 @@ type SyncableResource struct {
 	// sending synthetic limit/offset params to strict non-paginated list
 	// endpoints.
 	SupportsPagination bool
+	// Pagination* fields preserve the chosen list endpoint's concrete paging
+	// contract so generated sync does not reuse a different resource's default.
+	PaginationCursorParam string
+	PaginationCursorType  string
+	PaginationLimitParam  string
+	PaginationPageSize    int
+	// PaginationSort* describe an explicit ascending last-modified ordering
+	// that is safe to send alongside an incremental temporal filter.
+	PaginationSortParam string
+	PaginationSortValue string
+	// PaginationSortField is the temporal response field named by
+	// PaginationSortValue. It is the only field the generated sync may use for
+	// a capped watermark; another recognized timestamp is not an equivalent.
+	PaginationSortField string
 
 	// UsesHTMLResponse and HTMLExtract mirror the chosen list endpoint's
 	// response_format/html_extract contract so sync can normalize HTML into
@@ -157,6 +174,35 @@ type SyncableResource struct {
 	// resources before storage. Empty when the endpoint returns a homogeneous
 	// resource.
 	Discriminator DiscriminatorDispatch
+
+	// QueryEntity is the SQL-query entity name (e.g. "Customer") this resource
+	// reads through the shared query endpoint, set only when the API declares a
+	// query_sync hint (APISpec.QuerySync) and this resource's list endpoint
+	// matches it. Empty for every normal REST resource; the sync template emits
+	// the query injection / envelope unwrap / offset paging only for resources
+	// that carry it.
+	QueryEntity string
+
+	// ReconcileMode mirrors DependentResource.ReconcileMode for flat resources.
+	// Always "none" this round — forward-looking metadata reserved for a
+	// follow-up flat/tenant reconcile pass; no sync logic consumes it yet.
+	ReconcileMode string
+
+	// TenantScopeColumn is the resource's own tenant discriminator column
+	// (from x-pp-tenant-scope-column). Drives flat tenant reconcile and, for
+	// parent tables, tenant-scoped fan-out. Empty when unannotated.
+	TenantScopeColumn string
+
+	// HydratePath is set when this list endpoint returns scalar IDs that must
+	// be fetched through an item endpoint before store upsert.
+	HydratePath    string
+	HydrateIDParam string
+
+	// MembershipField is the boolean membership flag in this resource's own row
+	// payload (from x-pp-membership-field, e.g. "is_member"). For parent tables
+	// it drives membership-aware dependent fan-out (skip non-member parents).
+	// Empty when unannotated.
+	MembershipField string
 }
 
 // DependentResource describes a child resource that requires iterating a parent
@@ -169,6 +215,8 @@ type DependentResource struct {
 	Method         string
 	Tier           string
 	PathParams     []DependentPathParam
+	parentPath     string
+	parentPathLock bool
 
 	// IDField is the primary-key field name resolved from the spec
 	// (x-resource-id extension or the four-tier fallback chain). Empty when
@@ -194,6 +242,11 @@ type DependentResource struct {
 	// paths so dependent syncs skip synthetic limit/offset params on endpoints
 	// that do not declare page-size pagination.
 	SupportsPagination bool
+	// Pagination* mirrors SyncableResource for child sync paths.
+	PaginationCursorParam string
+	PaginationCursorType  string
+	PaginationLimitParam  string
+	PaginationPageSize    int
 
 	// UsesHTMLResponse and HTMLExtract mirror SyncableResource for child sync
 	// paths.
@@ -221,6 +274,20 @@ type DependentResource struct {
 	// in internal YAML, or the `key_field` key under `x-pp-sync-walker` in
 	// OpenAPI). When empty, the existing parent-primary-key flow runs.
 	KeyField string
+
+	// Reconciliation metadata (deletion mark-and-sweep). See sync.go.tmpl.
+	ReconcileMode        string                // "per_parent" | "none"
+	ParentScopeColumn    string                // e.g. "projects_id" (= ParentResource + "_id")
+	GenericScopeJSONPath string                // e.g. "$.project" (json path to the parent UUID in the body)
+	CascadeJunctions     []CascadeJunctionSpec // filled by the novel-junction seam, not the profiler
+}
+
+// CascadeJunctionSpec describes a junction table that must be pruned as part
+// of a per-parent reconciliation cascade. Populated by the novel-junction
+// registration seam (Task 4), not by the profiler itself.
+type CascadeJunctionSpec struct {
+	Table    string
+	FKColumn string
 }
 
 type DependentPathParam struct {
@@ -307,6 +374,7 @@ func Profile(s *spec.APISpec) *APIProfile {
 	cursorTypes := make(map[string]int)
 	pageSizeParams := make(map[string]int)
 	sinceParams := make(map[string]int)
+	sortSpecs := make(map[string]int)
 	dateRangeParams := make(map[string]int)
 	responsePaths := make(map[string]int)
 
@@ -431,7 +499,7 @@ func Profile(s *spec.APISpec) *APIProfile {
 				p.HasChronological = true
 			}
 
-			if isListEndpoint(endpointName, endpoint, s.Types) {
+			if isListEndpoint(endpointName, endpoint, s.Types) || hasScalarIDHydrationTarget(s, resourceName, endpoint, s.Types) {
 				listCapableEndpoints++
 				listResources[resourceName] = struct{}{}
 
@@ -444,7 +512,16 @@ func Profile(s *spec.APISpec) *APIProfile {
 				// parent-context iteration like /channels/{channelId}/messages
 				// does.
 				resolvable := pathParamsAllTemplateVars(endpoint.Path, s)
-				standaloneList := (!strings.Contains(endpoint.Path, "{") || resolvable) && !hasRequiredScopeParams(endpoint)
+				pathCallable := !strings.Contains(endpoint.Path, "{") || resolvable || endpoint.Syncable
+				requiredScope := hasRequiredScopeParams(endpoint)
+				standaloneList := pathCallable && (!requiredScope || endpoint.Syncable)
+				addStandaloneCandidate := func() {
+					meta := metaFromEndpoint(s, resourceName, r, endpoint, s.Types, resourceNameIndex)
+					if requiredScope && !endpoint.Syncable {
+						meta.SkipDefaultSync = true
+					}
+					addSyncCandidate(resourceName, meta)
+				}
 
 				if endpoint.Pagination != nil {
 					p.ListEndpoints++
@@ -455,7 +532,7 @@ func Profile(s *spec.APISpec) *APIProfile {
 					// GET /v1/api/networkentity?entityType=collection|workspace|api|flow
 					// → sync resources: collection, workspace, api, flow
 					if enumParam := findEntityTypeEnum(endpoint); standaloneList && enumParam != nil && len(enumParam.Enum) >= 2 {
-						addSyncCandidate(resourceName, metaFromEndpoint(s, resourceName, r, endpoint, s.Types, resourceNameIndex))
+						addStandaloneCandidate()
 						for _, val := range enumParam.Enum {
 							expandedName := strings.ToLower(val)
 							expandedPath := endpoint.Path + "?" + enumParam.Name + "=" + val
@@ -466,7 +543,7 @@ func Profile(s *spec.APISpec) *APIProfile {
 							meta.Path = expandedPath
 							syncable[expandedName] = meta
 						}
-					} else if strings.Contains(endpoint.Path, "{") && !resolvable && !hasRequiredDependentScopeParams(endpoint) {
+					} else if strings.Contains(endpoint.Path, "{") && !resolvable && !endpoint.Syncable && !hasRequiredDependentScopeParams(endpoint) && isPathTemplateCollection(endpoint.Path) {
 						// Parameterized paginated paths can't sync standalone — track
 						// them for dependent-resource detection below. Carry the
 						// endpoint's metadata so x-resource-id and x-critical
@@ -482,12 +559,16 @@ func Profile(s *spec.APISpec) *APIProfile {
 							}
 						}
 					} else if standaloneList {
-						addSyncCandidate(resourceName, metaFromEndpoint(s, resourceName, r, endpoint, s.Types, resourceNameIndex))
+						addStandaloneCandidate()
+					} else if pathCallable && requiredScope {
+						addStandaloneCandidate()
 					}
 				} else if standaloneList {
-					addSyncCandidate(resourceName, metaFromEndpoint(s, resourceName, r, endpoint, s.Types, resourceNameIndex))
+					addStandaloneCandidate()
+				} else if pathCallable && requiredScope {
+					addStandaloneCandidate()
 				}
-			} else if method == "GET" && (!strings.Contains(endpoint.Path, "{") || pathParamsAllTemplateVars(endpoint.Path, s)) && !hasRequiredScopeParams(endpoint) && looksLikeCollectionEndpoint(endpointNameLower) && !isSamplerEndpoint(endpoint) && !isScalarItemArray(endpoint.Response) {
+			} else if method == "GET" && (!strings.Contains(endpoint.Path, "{") || pathParamsAllTemplateVars(endpoint.Path, s) || endpoint.Syncable) && looksLikeCollectionEndpoint(endpointNameLower) && (endpoint.Syncable || !isActionGetEndpoint(endpoint.Path)) && !isSamplerEndpoint(endpoint) && !isScalarItemArray(endpoint.Response) {
 				// Catch-all for simple GET collection endpoints that isListEndpoint
 				// didn't recognise (e.g., response is an untyped object with no
 				// wrapper field defined in the spec's types map).
@@ -496,17 +577,24 @@ func Profile(s *spec.APISpec) *APIProfile {
 				// Re-apply the sampler and scalar-array guards here: this branch runs
 				// when isListEndpoint returned false, so without them a collection-named
 				// sampler/scalar-array endpoint would be re-admitted past those gates.
-				addSyncCandidate(resourceName, metaFromEndpoint(s, resourceName, r, endpoint, s.Types, resourceNameIndex))
+				meta := metaFromEndpoint(s, resourceName, r, endpoint, s.Types, resourceNameIndex)
+				if hasRequiredScopeParams(endpoint) && !endpoint.Syncable {
+					meta.SkipDefaultSync = true
+				}
+				addSyncCandidate(resourceName, meta)
 			}
 
 			if endpoint.Pagination != nil {
-				if endpoint.Pagination.Type != spec.PaginationTypeIDWalk && endpoint.Pagination.CursorParam != "" {
+				if isRuntimePagination(endpoint.Pagination) && endpoint.Pagination.CursorParam != "" {
 					cursorParams[endpoint.Pagination.CursorParam]++
 				}
-				if endpoint.Pagination.Type != "" && endpoint.Pagination.Type != spec.PaginationTypeIDWalk {
-					cursorTypes[endpoint.Pagination.Type]++
+				if isRuntimePagination(endpoint.Pagination) {
+					_, cursorType, _, _ := syncPaginationDefaultsFromEndpoint(endpoint)
+					if cursorType != "" {
+						cursorTypes[cursorType]++
+					}
 				}
-				if endpoint.Pagination.Type != spec.PaginationTypeIDWalk && endpoint.Pagination.LimitParam != "" {
+				if isRuntimePagination(endpoint.Pagination) && endpoint.Pagination.LimitParam != "" {
 					pageSizeParams[endpoint.Pagination.LimitParam]++
 				}
 			} else {
@@ -528,11 +616,14 @@ func Profile(s *spec.APISpec) *APIProfile {
 			if endpoint.ResponsePath != "" {
 				responsePaths[endpoint.ResponsePath]++
 			}
+			if sinceParam, _ := detectEndpointSinceParamAndFormat(endpoint, s.Types); sinceParam != "" {
+				sinceParams[sinceParam]++
+			}
+			if sortParam, sortValue := detectEndpointSyncSort(endpoint); sortParam != "" && sortValue != "" {
+				sortSpecs[sortParam+"\x00"+sortValue]++
+			}
 			for _, param := range endpoint.Params {
 				name := strings.ToLower(param.Name)
-				if isEndpointSinceParamName(name) {
-					sinceParams[param.Name]++
-				}
 				if name == "dates" || name == "date_range" || name == "daterange" {
 					dateRangeParams[param.Name]++
 				}
@@ -601,20 +692,50 @@ func Profile(s *spec.APISpec) *APIProfile {
 	}
 	p.NeedsSearch = len(listResources) >= 3 && float64(searchEndpointCount)/float64(len(listResources)) < 0.5
 
-	p.SyncableResources = sortedSyncableResources(syncable)
 	p.DependentSyncResources = detectDependentResources(parameterized, syncable, shardedSubResources)
 	p.DependentSyncResources = applySpecWalkers(s, p.DependentSyncResources, syncable, s.Types, resourceNameIndex)
+	uniquifyDependentResourceNames(p.DependentSyncResources, syncable)
+	sortDependentResources(p.DependentSyncResources, nil)
+	addUnresolvedPathTemplateCollections(syncable, parameterized, p.DependentSyncResources)
+	p.SyncableResources = sortedSyncableResources(syncable)
+	// Flat tenant-scoped reconcile: a flat resource is reconcilable only when it
+	// is tenant-discriminated (its rows carry a tenant column) AND has a stable
+	// PK AND will not mis-route items through a discriminator dispatcher. All
+	// other flat resources stay "none". flat_global is intentionally unreachable.
+	for i := range p.SyncableResources {
+		sr := &p.SyncableResources[i]
+		if sr.TenantScopeColumn != "" && sr.IDField != "" && sr.Discriminator.Field == "" {
+			sr.ReconcileMode = "flat"
+		} else {
+			sr.ReconcileMode = "none"
+		}
+	}
+	// Populate reconcile metadata for each dependent resource.
+	// per_parent is safe only for a single-path-param dependent with a PK.
+	for i := range p.DependentSyncResources {
+		dep := &p.DependentSyncResources[i]
+		if len(dep.PathParams) == 1 && dep.IDField != "" {
+			dep.ReconcileMode = "per_parent"
+			dep.ParentScopeColumn = dep.ParentResource + "_id"
+			dep.GenericScopeJSONPath = "$." + singularParentField(dep.ParentResource)
+		} else {
+			dep.ReconcileMode = "none"
+		}
+	}
 	for resource, fields := range searchable {
 		p.SearchableFields[resource] = sortedKeys(fields)
 	}
 
 	p.Domain = detectDomainSignals(s)
 
+	sortParam, sortValue := mostCommonSort(sortSpecs)
 	p.Pagination = PaginationProfile{
 		CursorParam:     mostCommon(cursorParams, "after"),
 		CursorType:      mostCommon(cursorTypes, ""),
 		PageSizeParam:   mostCommon(pageSizeParams, "limit"),
 		SinceParam:      mostCommon(sinceParams, ""),
+		SortParam:       sortParam,
+		SortValue:       sortValue,
 		DateRangeParam:  mostCommon(dateRangeParams, ""),
 		ItemsKey:        mostCommon(responsePaths, ""),
 		DefaultPageSize: 100,
@@ -724,6 +845,104 @@ func (p *APIProfile) SyncableResourceNames() []string {
 	return syncableResourceNames(p.SyncableResources)
 }
 
+// TenantScopedParent names a parent table and its tenant discriminator column.
+type TenantScopedParent struct {
+	Parent string
+	Column string
+}
+
+// TenantScopedParents lists dependent-parent tables that carry a tenant column,
+// for the generated parentTenantScopeColumns map. Sorted by parent for
+// deterministic output.
+func (p *APIProfile) TenantScopedParents() []TenantScopedParent {
+	seen := map[string]string{}
+	for _, sr := range p.SyncableResources {
+		if sr.TenantScopeColumn == "" {
+			continue
+		}
+		for _, dep := range p.DependentSyncResources {
+			if dep.ParentResource == sr.Name {
+				seen[sr.Name] = sr.TenantScopeColumn
+			}
+		}
+	}
+	out := make([]TenantScopedParent, 0, len(seen))
+	for parent, col := range seen {
+		out = append(out, TenantScopedParent{Parent: parent, Column: col})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Parent < out[j].Parent })
+	return out
+}
+
+// MembershipScopedParent names a parent table and its boolean membership field.
+type MembershipScopedParent struct {
+	Parent string
+	Field  string
+}
+
+// MembershipScopedParents lists dependent-parent tables that declare a
+// membership field (x-pp-membership-field), for the generated
+// membershipScopedParents map. Only parents that actually have dependents are
+// included. Sorted by parent for deterministic output.
+func (p *APIProfile) MembershipScopedParents() []MembershipScopedParent {
+	seen := map[string]string{}
+	for _, sr := range p.SyncableResources {
+		if sr.MembershipField == "" {
+			continue
+		}
+		for _, dep := range p.DependentSyncResources {
+			if dep.ParentResource == sr.Name {
+				seen[sr.Name] = sr.MembershipField
+			}
+		}
+	}
+	out := make([]MembershipScopedParent, 0, len(seen))
+	for parent, field := range seen {
+		out = append(out, MembershipScopedParent{Parent: parent, Field: field})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Parent < out[j].Parent })
+	return out
+}
+
+// ChildScopeSource maps a typed child scope column to the body field it is
+// derived from (the singular parent reference). Drives deriveScopeColumns.
+type ChildScopeSource struct {
+	Column string // e.g. "projects_id"
+	Source string // e.g. "project"
+}
+
+// ChildScopeColumnSources lists (scopeColumn -> sourceField) for every dependent
+// whose parent injects a scope column, deduped and sorted. Built from the same
+// metadata that yields ParentScopeColumn and GenericScopeJSONPath.
+func (p *APIProfile) ChildScopeColumnSources() []ChildScopeSource {
+	seen := map[string]string{}
+	for _, dep := range p.DependentSyncResources {
+		col := dep.ParentScopeColumn
+		if col == "" {
+			col = dep.ParentResource + "_id"
+		}
+		src := singularParentField(dep.ParentResource)
+		if src == "" {
+			continue
+		}
+		// col is non-empty here: either an explicit ParentScopeColumn or the
+		// "<parent>_id" default. If two dependents resolve to the same scope
+		// column with DIFFERENT source fields, keep the first deterministically
+		// and skip the conflicting one rather than letting slice order silently
+		// pick a winner (which could wire the wrong source into deriveScopeColumns).
+		if existing, ok := seen[col]; ok && existing != src {
+			continue
+		}
+		seen[col] = src
+	}
+	out := make([]ChildScopeSource, 0, len(seen))
+	for col, src := range seen {
+		out = append(out, ChildScopeSource{Column: col, Source: src})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Column < out[j].Column })
+	return out
+}
+
 func featureIdeaFor(name string, p *APIProfile) vision.FeatureIdea {
 	switch name {
 	case "sync":
@@ -815,11 +1034,11 @@ func dataFit(v bool) int {
 var (
 	pageSizeParamCandidates = map[string]bool{
 		"limit": true, "per_page": true, "page_size": true, "pagesize": true,
-		"first": true, "count": true, "max_results": true, "maxrecords": true,
-		"max_records": true, "page[size]": true,
+		"perpage": true, "first": true, "count": true, "max_results": true,
+		"maxrecords": true, "max_records": true, "page[size]": true,
 	}
 	cursorParamCandidates = map[string]bool{
-		"after": true, "cursor": true, "page_token": true, "offset": true,
+		"after": true, "cursor": true, "page_token": true, "offset": true, "skip": true,
 		"page": true, "before": true, "starting_after": true, "page[cursor]": true,
 	}
 )
@@ -867,9 +1086,18 @@ func hasRequiredDependentScopeParams(endpoint spec.Endpoint) bool {
 func hasRequiredScopeParamsForSync(endpoint spec.Endpoint, allowEnumExpansion bool) bool {
 	temporalOrFormatParams := map[string]bool{
 		"since": true, "updated_after": true, "modified_since": true, "since_id": true,
+		"from": true, "to": true, "start_date": true, "end_date": true,
+		"start_datetime": true, "end_datetime": true, "start_time": true, "end_time": true,
+		"from_date": true, "to_date": true, "from_datetime": true, "to_datetime": true,
 		"key": true, "format": true,
 	}
 	for _, param := range endpoint.Params {
+		// Headers are transport inputs, not caller-supplied resource scope.
+		// They were historically absent from parsed endpoint params; preserve
+		// that sync classification now that OpenAPI header params are retained.
+		if loc := strings.TrimSpace(param.In); loc != "" && !strings.EqualFold(loc, "query") {
+			continue
+		}
 		if param.Required && !param.Positional && !param.PathParam {
 			if param.GlobalScope && strings.EqualFold(param.Type, "string") {
 				continue
@@ -932,6 +1160,9 @@ func isListEndpoint(name string, endpoint spec.Endpoint, types map[string]spec.T
 	if method != "GET" {
 		return false
 	}
+	if !endpoint.Syncable && isActionGetEndpoint(endpoint.Path) {
+		return false
+	}
 	if endpoint.Pagination != nil {
 		return true
 	}
@@ -940,6 +1171,49 @@ func isListEndpoint(name string, endpoint spec.Endpoint, types map[string]spec.T
 	}
 
 	return looksLikeBasicGetListEndpoint(strings.ToLower(name))
+}
+
+var nonListActionSegments = map[string]bool{
+	"events": true,
+	"find":   true,
+	"lookup": true,
+	"search": true,
+}
+
+func isActionGetEndpoint(path string) bool {
+	segments := staticPathSegments(path)
+	segments = trimVersionPathSegments(segments)
+	if len(segments) < 2 {
+		return false
+	}
+	last := actionSegmentBase(segments[len(segments)-1])
+	return nonListActionSegments[last]
+}
+
+func trimVersionPathSegments(segments []string) []string {
+	for len(segments) > 0 && isVersionPathSegment(segments[0]) {
+		segments = segments[1:]
+	}
+	return segments
+}
+
+func isVersionPathSegment(segment string) bool {
+	if len(segment) < 2 || segment[0] != 'v' {
+		return false
+	}
+	for _, r := range segment[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func actionSegmentBase(segment string) string {
+	for _, suffix := range []string{"-json", "_json", ".json"} {
+		segment = strings.TrimSuffix(segment, suffix)
+	}
+	return segment
 }
 
 // scalarItemTypes are the response-array element type names the parser emits
@@ -1314,7 +1588,7 @@ func detectDependentResources(parameterized map[string]parameterizedEntry, synca
 		progressed := false
 		for _, key := range keys {
 			entry := parameterized[key]
-			dep, ok := dependentResourceFromEntry(entry, knownParents, shardedSubResources)
+			dep, ok := dependentResourceFromEntry(entry, knownParents, syncable, shardedSubResources)
 			if !ok {
 				next = append(next, key)
 				continue
@@ -1334,6 +1608,106 @@ func detectDependentResources(parameterized map[string]parameterizedEntry, synca
 	}
 	sortDependentResources(deps, depthByResource)
 	return deps
+}
+
+func uniquifyDependentResourceNames(deps []DependentResource, syncable map[string]syncableMeta) {
+	originalNames := make([]string, len(deps))
+	counts := make(map[string]int, len(deps))
+	for i, dep := range deps {
+		originalNames[i] = dep.Name
+		counts[dep.Name]++
+	}
+
+	used := make(map[string]bool, len(syncable)+len(deps))
+	for name := range syncable {
+		used[name] = true
+	}
+	for name, count := range counts {
+		if count == 1 {
+			used[name] = true
+		}
+	}
+
+	for _, name := range sortedKeys(counts) {
+		count := counts[name]
+		if count < 2 {
+			continue
+		}
+		indices := make([]int, 0, count)
+		for i := range deps {
+			if deps[i].Name == name {
+				indices = append(indices, i)
+			}
+		}
+		sort.Slice(indices, func(i, j int) bool {
+			left, right := deps[indices[i]], deps[indices[j]]
+			if left.Path != right.Path {
+				return left.Path < right.Path
+			}
+			return left.Method < right.Method
+		})
+
+		for _, index := range indices {
+			candidate := dependentPathResourceName(deps[index])
+			if candidate == "" {
+				candidate = name
+			}
+			if used[candidate] {
+				base := candidate
+				if method := strings.ToLower(strings.TrimSpace(deps[index].Method)); method != "" {
+					candidate = base + "_" + spec.ToSnakeCase(method)
+				}
+				for suffix := 2; used[candidate]; suffix++ {
+					candidate = fmt.Sprintf("%s_%d", base, suffix)
+				}
+			}
+			deps[index].Name = candidate
+			used[candidate] = true
+		}
+	}
+	updateDependentParentNames(deps, originalNames)
+}
+
+func updateDependentParentNames(deps []DependentResource, originalNames []string) {
+	for i := range deps {
+		if deps[i].parentPathLock || deps[i].parentPath == "" {
+			continue
+		}
+		for j := range deps {
+			if originalNames[j] != deps[i].ParentResource || deps[j].Path != deps[i].parentPath {
+				continue
+			}
+			deps[i].ParentResource = deps[j].Name
+			break
+		}
+	}
+}
+
+func dependentPathResourceName(dep DependentResource) string {
+	segments := staticPathSegments(dep.Path)
+	if len(segments) == 0 {
+		return ""
+	}
+	return spec.ToSnakeCase(strings.Join(segments, "_"))
+}
+
+func addUnresolvedPathTemplateCollections(syncable map[string]syncableMeta, parameterized map[string]parameterizedEntry, deps []DependentResource) {
+	dependentPaths := make(map[string]struct{}, len(deps))
+	for _, dep := range deps {
+		dependentPaths[dep.Path] = struct{}{}
+	}
+	for _, key := range sortedKeys(parameterized) {
+		entry := parameterized[key]
+		if _, ok := dependentPaths[entry.meta.Path]; ok {
+			continue
+		}
+		if !isPathTemplateCollection(entry.meta.Path) {
+			continue
+		}
+		meta := entry.meta
+		meta.SkipDefaultSync = true
+		addSyncableIfUnique(syncable, strings.ToLower(entry.name), meta)
+	}
 }
 
 func sortDependentResources(deps []DependentResource, knownDepths map[string]int) {
@@ -1372,34 +1746,50 @@ func sortDependentResources(deps []DependentResource, knownDepths map[string]int
 	})
 }
 
-func dependentResourceFromEntry(entry parameterizedEntry, knownParents map[string]bool, shardedSubResources spec.SubResourceShards) (DependentResource, bool) {
+func dependentResourceFromEntry(entry parameterizedEntry, knownParents map[string]bool, syncable map[string]syncableMeta, shardedSubResources spec.SubResourceShards) (DependentResource, bool) {
 	ctx, ok := dependentPathContext(entry, knownParents, shardedSubResources)
 	if !ok {
 		return DependentResource{}, false
 	}
+	keyField := parentIDFieldForDependent(ctx.parentResource, syncable)
 
 	return DependentResource{
-		Name:               ctx.name,
-		ParentResource:     ctx.parentResource,
-		ParentIDParam:      dependentParentIDParam(entry.meta.Path, ctx.parentPathSegment, ctx.firstParam),
-		Path:               entry.meta.Path,
-		Method:             entry.meta.Method,
-		Tier:               entry.meta.Tier,
-		PathParams:         dependentPathParams(entry.meta.Path, ctx.parentPathSegment, ctx.firstParam, ""),
-		IDField:            entry.meta.IDField,
-		Critical:           entry.meta.Critical,
-		SinceParam:         entry.meta.SinceParam,
-		SinceParamFormat:   entry.meta.SinceParamFormat,
-		SupportsPagination: entry.meta.SupportsPagination,
-		UsesHTMLResponse:   entry.meta.UsesHTMLResponse,
-		HTMLExtract:        entry.meta.HTMLExtract,
-		BodyFields:         entry.meta.BodyFields,
-		IDWalkFilterParam:  entry.meta.IDWalkFilterParam,
-		IDWalkLimitParam:   entry.meta.IDWalkLimitParam,
-		IDWalkPageSize:     entry.meta.IDWalkPageSize,
-		FieldSelector:      entry.meta.FieldSelector,
-		Discriminator:      entry.meta.Discriminator,
+		Name:                  ctx.name,
+		ParentResource:        ctx.parentResource,
+		ParentIDParam:         dependentParentIDParam(entry.meta.Path, ctx.parentPathSegment, ctx.firstParam),
+		Path:                  entry.meta.Path,
+		Method:                entry.meta.Method,
+		Tier:                  entry.meta.Tier,
+		PathParams:            dependentPathParams(entry.meta.Path, ctx.parentPathSegment, ctx.firstParam, keyField),
+		parentPath:            dependentParentPath(entry.meta.Path, ctx.parentPathSegment),
+		IDField:               entry.meta.IDField,
+		Critical:              entry.meta.Critical,
+		SinceParam:            entry.meta.SinceParam,
+		SinceParamFormat:      entry.meta.SinceParamFormat,
+		SupportsPagination:    entry.meta.SupportsPagination,
+		PaginationCursorParam: entry.meta.PaginationCursorParam,
+		PaginationCursorType:  entry.meta.PaginationCursorType,
+		PaginationLimitParam:  entry.meta.PaginationLimitParam,
+		PaginationPageSize:    entry.meta.PaginationPageSize,
+		UsesHTMLResponse:      entry.meta.UsesHTMLResponse,
+		HTMLExtract:           entry.meta.HTMLExtract,
+		BodyFields:            entry.meta.BodyFields,
+		IDWalkFilterParam:     entry.meta.IDWalkFilterParam,
+		IDWalkLimitParam:      entry.meta.IDWalkLimitParam,
+		IDWalkPageSize:        entry.meta.IDWalkPageSize,
+		FieldSelector:         entry.meta.FieldSelector,
+		Discriminator:         entry.meta.Discriminator,
 	}, true
+}
+
+func parentIDFieldForDependent(parentResource string, syncable map[string]syncableMeta) string {
+	if syncable == nil {
+		return ""
+	}
+	if meta, ok := syncable[parentResource]; ok {
+		return strings.TrimSpace(meta.IDField)
+	}
+	return ""
 }
 
 type dependentContext struct {
@@ -1582,9 +1972,14 @@ func applySpecWalkers(s *spec.APISpec, deps []DependentResource, syncable map[st
 				}
 			}
 			keyField := strings.TrimSpace(e.Walker.KeyField)
+			if keyField == "" {
+				keyField = parentIDFieldForDependent(parent, syncable)
+			}
 			lookupKey := "GET " + e.Path
 			if idx, ok := byPath[lookupKey]; ok {
 				deps[idx].ParentResource = parent
+				deps[idx].parentPath = ""
+				deps[idx].parentPathLock = true
 				if keyParam != "" {
 					deps[idx].ParentIDParam = keyParam
 				}
@@ -1594,27 +1989,32 @@ func applySpecWalkers(s *spec.APISpec, deps []DependentResource, syncable map[st
 			}
 			meta := metaFromEndpoint(s, resourceName, r, e, types, resourceNameIndex)
 			deps = append(deps, DependentResource{
-				Name:               spec.ToSnakeCase(resourceName),
-				ParentResource:     parent,
-				ParentIDParam:      keyParam,
-				Path:               e.Path,
-				Method:             meta.Method,
-				Tier:               meta.Tier,
-				PathParams:         dependentPathParams(e.Path, parent, keyParam, keyField),
-				IDField:            meta.IDField,
-				Critical:           meta.Critical,
-				SinceParam:         meta.SinceParam,
-				SinceParamFormat:   meta.SinceParamFormat,
-				SupportsPagination: meta.SupportsPagination,
-				UsesHTMLResponse:   meta.UsesHTMLResponse,
-				HTMLExtract:        meta.HTMLExtract,
-				BodyFields:         meta.BodyFields,
-				IDWalkFilterParam:  meta.IDWalkFilterParam,
-				IDWalkLimitParam:   meta.IDWalkLimitParam,
-				IDWalkPageSize:     meta.IDWalkPageSize,
-				FieldSelector:      meta.FieldSelector,
-				Discriminator:      meta.Discriminator,
-				KeyField:           keyField,
+				Name:                  spec.ToSnakeCase(resourceName),
+				ParentResource:        parent,
+				ParentIDParam:         keyParam,
+				Path:                  e.Path,
+				parentPathLock:        true,
+				Method:                meta.Method,
+				Tier:                  meta.Tier,
+				PathParams:            dependentPathParams(e.Path, parent, keyParam, keyField),
+				IDField:               meta.IDField,
+				Critical:              meta.Critical,
+				SinceParam:            meta.SinceParam,
+				SinceParamFormat:      meta.SinceParamFormat,
+				SupportsPagination:    meta.SupportsPagination,
+				PaginationCursorParam: meta.PaginationCursorParam,
+				PaginationCursorType:  meta.PaginationCursorType,
+				PaginationLimitParam:  meta.PaginationLimitParam,
+				PaginationPageSize:    meta.PaginationPageSize,
+				UsesHTMLResponse:      meta.UsesHTMLResponse,
+				HTMLExtract:           meta.HTMLExtract,
+				BodyFields:            meta.BodyFields,
+				IDWalkFilterParam:     meta.IDWalkFilterParam,
+				IDWalkLimitParam:      meta.IDWalkLimitParam,
+				IDWalkPageSize:        meta.IDWalkPageSize,
+				FieldSelector:         meta.FieldSelector,
+				Discriminator:         meta.Discriminator,
+				KeyField:              keyField,
 			})
 			byPath[lookupKey] = len(deps) - 1
 		}
@@ -1660,6 +2060,50 @@ func dependentParentIDParam(path, parentResource, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+func dependentParentPath(path, parentSegment string) string {
+	segments := pathSegments(path)
+	index := lastStaticSegmentIndex(segments, spec.ToSnakeCase(parentSegment))
+	if index < 0 {
+		return ""
+	}
+	return "/" + strings.Join(segments[:index+1], "/")
+}
+
+// parentFieldIrregulars maps plural parent resource names whose singular form a
+// naive TrimSuffix("s") would mangle to the correct singular field. The "-ies →
+// -y" class is handled by rule below; this table is for the residual irregulars.
+var parentFieldIrregulars = map[string]string{
+	"statuses":  "status",
+	"addresses": "address",
+	"buses":     "bus",
+	"classes":   "class",
+	"indexes":   "index",
+	"indices":   "index",
+	"matrices":  "matrix",
+	"people":    "person",
+}
+
+// singularParentField maps a plural parent resource name to the singular field
+// the API body carries for that parent (e.g. "projects" → "project"). Mirrors
+// the childScopeColumnSources convention used by deriveScopeColumns in the store.
+// A bare TrimSuffix("s") mangles irregular plurals ("categories" → "categorie"),
+// which would silently break reconciliation (json_extract on a wrong path returns
+// NULL for every row, so ReconcilePartition sweeps nothing). Guard the common
+// English classes: an explicit irregulars table, then the "-ies → -y" rule, then
+// the regular "-s" trim. Genuinely irregular forms outside the table still fall
+// through to TrimSuffix, so a future spec with an exotic plural should add it here.
+func singularParentField(parentResource string) string {
+	if s, ok := parentFieldIrregulars[parentResource]; ok {
+		return s
+	}
+	// "categories" → "category", "activities" → "activity". Guard length so a
+	// 3-letter "-ies" word (none in practice) can't underflow to "".
+	if strings.HasSuffix(parentResource, "ies") && len(parentResource) > 4 {
+		return strings.TrimSuffix(parentResource, "ies") + "y"
+	}
+	return strings.TrimSuffix(parentResource, "s")
 }
 
 func dependentPathParamFields(path, parentResource string) map[string]string {
@@ -1760,6 +2204,14 @@ func pathSegments(path string) []string {
 	return strings.Split(strings.Trim(path, "/"), "/")
 }
 
+func isPathTemplateCollection(path string) bool {
+	segments := pathSegments(path)
+	if len(segments) == 0 || !strings.Contains(path, "{") {
+		return false
+	}
+	return !isPathPlaceholder(segments[len(segments)-1])
+}
+
 func nextStaticSegmentIndex(segments []string, start int) int {
 	for i := start; i < len(segments); i++ {
 		if !isPathPlaceholder(segments[i]) {
@@ -1849,24 +2301,36 @@ func resolveParentResourceName(walkParent, paramName string, knownParents map[st
 // is still selecting between candidates (e.g., flat vs. paginated). It is
 // converted into a SyncableResource at the end of Profile().
 type syncableMeta struct {
-	Path               string
-	Method             string
-	Tier               string
-	SkipDefaultSync    bool
-	IDField            string
-	Critical           bool
-	SinceParam         string
-	SinceParamFormat   string
-	SupportsPagination bool
-	UsesHTMLResponse   bool
-	HTMLExtract        *spec.HTMLExtract
-	BodyFields         []SyncBodyField
-	IDWalkFilterParam  string
-	IDWalkLimitParam   string
-	IDWalkPageSize     int
-	FieldSelector      FieldSelector
-	Discriminator      DiscriminatorDispatch
-	ResponseItem       string
+	Path                  string
+	Method                string
+	Tier                  string
+	SkipDefaultSync       bool
+	IDField               string
+	Critical              bool
+	SinceParam            string
+	SinceParamFormat      string
+	SupportsPagination    bool
+	PaginationCursorParam string
+	PaginationCursorType  string
+	PaginationLimitParam  string
+	PaginationPageSize    int
+	PaginationSortParam   string
+	PaginationSortValue   string
+	PaginationSortField   string
+	UsesHTMLResponse      bool
+	HTMLExtract           *spec.HTMLExtract
+	BodyFields            []SyncBodyField
+	IDWalkFilterParam     string
+	IDWalkLimitParam      string
+	IDWalkPageSize        int
+	FieldSelector         FieldSelector
+	Discriminator         DiscriminatorDispatch
+	ResponseItem          string
+	QueryEntity           string
+	TenantScopeColumn     string
+	HydratePath           string
+	HydrateIDParam        string
+	MembershipField       string
 }
 
 type syncableCandidate struct {
@@ -1889,26 +2353,161 @@ type parameterizedEntry struct {
 // fields propagate uniformly.
 func metaFromEndpoint(s *spec.APISpec, resourceName string, resource spec.Resource, e spec.Endpoint, types map[string]spec.TypeDef, resourceNameIndex map[string]string) syncableMeta {
 	idWalkFilterParam, idWalkLimitParam, idWalkPageSize := detectIDWalkParams(e)
+	sinceParam, sinceParamFormat := detectEndpointSinceParamAndFormat(e, types)
+	paginationCursorParam, paginationCursorType, paginationLimitParam, paginationPageSize := syncPaginationDefaultsFromEndpoint(e)
+	paginationSortParam, paginationSortValue := detectEndpointSyncSort(e)
+	paginationSortField := temporalSortField(paginationSortValue)
+	hydratePath, hydrateIDParam := scalarIDHydrationTarget(s, resourceName, e, types)
 	return syncableMeta{
-		Path:               e.Path,
-		Method:             strings.ToUpper(e.Method),
-		Tier:               s.EffectiveTier(resource, e),
-		SkipDefaultSync:    isAuthTaggedEndpoint(e) || hasTypedResponseWithoutRuntimeID(resourceName, e, types),
-		IDField:            e.IDField,
-		Critical:           e.Critical,
-		SinceParam:         detectEndpointSinceParam(e.Params),
-		SinceParamFormat:   detectEndpointSinceParamFormat(e.Params),
-		SupportsPagination: endpointSupportsPagination(e),
-		UsesHTMLResponse:   e.UsesHTMLResponse(),
-		HTMLExtract:        e.HTMLExtract,
-		BodyFields:         syncBodyFieldsFromEndpoint(e),
-		IDWalkFilterParam:  idWalkFilterParam,
-		IDWalkLimitParam:   idWalkLimitParam,
-		IDWalkPageSize:     idWalkPageSize,
-		FieldSelector:      detectEndpointFieldSelector(e),
-		Discriminator:      discriminatorDispatchForEndpoint(e, types, resourceNameIndex),
-		ResponseItem:       e.Response.Item,
+		Path:                  e.Path,
+		Method:                strings.ToUpper(e.Method),
+		Tier:                  s.EffectiveTier(resource, e),
+		SkipDefaultSync:       isAuthTaggedEndpoint(e) || hasTypedResponseWithoutRuntimeID(resourceName, e, types),
+		IDField:               e.IDField,
+		Critical:              e.Critical,
+		SinceParam:            sinceParam,
+		SinceParamFormat:      sinceParamFormat,
+		SupportsPagination:    endpointSupportsPagination(e),
+		PaginationCursorParam: paginationCursorParam,
+		PaginationCursorType:  paginationCursorType,
+		PaginationLimitParam:  paginationLimitParam,
+		PaginationPageSize:    paginationPageSize,
+		PaginationSortParam:   paginationSortParam,
+		PaginationSortValue:   paginationSortValue,
+		PaginationSortField:   paginationSortField,
+		UsesHTMLResponse:      e.UsesHTMLResponse(),
+		HTMLExtract:           e.HTMLExtract,
+		BodyFields:            syncBodyFieldsFromEndpoint(e),
+		IDWalkFilterParam:     idWalkFilterParam,
+		IDWalkLimitParam:      idWalkLimitParam,
+		IDWalkPageSize:        idWalkPageSize,
+		FieldSelector:         detectEndpointFieldSelector(e),
+		Discriminator:         discriminatorDispatchForEndpoint(e, types, resourceNameIndex),
+		ResponseItem:          e.Response.Item,
+		QueryEntity:           queryEntityForEndpoint(s, e),
+		TenantScopeColumn:     e.TenantScopeColumn,
+		HydratePath:           hydratePath,
+		HydrateIDParam:        hydrateIDParam,
+		MembershipField:       e.MembershipField,
 	}
+}
+
+func hasScalarIDHydrationTarget(s *spec.APISpec, resourceName string, endpoint spec.Endpoint, types map[string]spec.TypeDef) bool {
+	path, _ := scalarIDHydrationTarget(s, resourceName, endpoint, types)
+	return path != ""
+}
+
+func scalarIDHydrationTarget(s *spec.APISpec, resourceName string, endpoint spec.Endpoint, types map[string]spec.TypeDef) (string, string) {
+	if s == nil || !isScalarIDListShape(endpoint, types) {
+		return "", ""
+	}
+	type candidate struct {
+		path    string
+		param   string
+		score   int
+		pathLen int
+	}
+	var candidates []candidate
+	walkResources(s.Resources, func(name string, resource spec.Resource) {
+		for _, epName := range sortedKeys(resource.Endpoints) {
+			ep := resource.Endpoints[epName]
+			if strings.EqualFold(ep.Path, endpoint.Path) || !strings.EqualFold(ep.Method, "GET") {
+				continue
+			}
+			placeholders := orderedPathPlaceholders(ep.Path)
+			if len(placeholders) != 1 || ep.Response.Type != "object" {
+				continue
+			}
+			score := hydrationTargetScore(resourceName, name, epName, ep)
+			if score == 0 {
+				continue
+			}
+			candidates = append(candidates, candidate{
+				path:    ep.Path,
+				param:   placeholders[0],
+				score:   score,
+				pathLen: len(ep.Path),
+			})
+		}
+	})
+	if len(candidates) == 0 {
+		return "", ""
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		if candidates[i].pathLen != candidates[j].pathLen {
+			return candidates[i].pathLen < candidates[j].pathLen
+		}
+		return candidates[i].path < candidates[j].path
+	})
+	return candidates[0].path, candidates[0].param
+}
+
+func isScalarIDListShape(endpoint spec.Endpoint, types map[string]spec.TypeDef) bool {
+	if !strings.EqualFold(endpoint.Method, "GET") {
+		return false
+	}
+	if isScalarItemArray(endpoint.Response) {
+		return true
+	}
+	if endpoint.Response.Type != "object" || endpoint.Response.Item == "" || endpoint.IDField != "" {
+		return false
+	}
+	typeDef, ok := lookupTypeDef(endpoint.Response.Item, types)
+	if !ok {
+		return false
+	}
+	for _, field := range typeDef.Fields {
+		if strings.EqualFold(field.Name, "items") && strings.EqualFold(field.Type, "array") {
+			return true
+		}
+	}
+	return false
+}
+
+func hydrationTargetScore(listResourceName, targetResourceName, endpointName string, endpoint spec.Endpoint) int {
+	score := 0
+	targetNames := append(nameVariants(listResourceName), "item")
+	for _, segment := range staticPathSegments(endpoint.Path) {
+		if slices.Contains(targetNames, normalizeSyncResourceSegment(segment)) || segment == "item" {
+			score += 4
+			break
+		}
+	}
+	for _, value := range []string{targetResourceName, endpointName} {
+		for _, variant := range nameVariants(value) {
+			if slices.Contains(targetNames, variant) || variant == "item" {
+				score += 2
+				break
+			}
+		}
+	}
+	if endpoint.IDField != "" {
+		score++
+	}
+	return score
+}
+
+// queryEntityForEndpoint returns the SQL-query entity name for a list endpoint
+// when the API declares a query_sync hint and this endpoint reads through the
+// shared query path with an entity-named envelope. The entity is the
+// Response.Item type (e.g. "Customer"), falling back to the ResponsePath leaf
+// (e.g. "QueryResponse.Customer" -> "Customer"). Returns "" for non-query
+// endpoints and for raw passthrough resources on the same path that declare no
+// ResponsePath, so they never get a bogus query injection.
+func queryEntityForEndpoint(s *spec.APISpec, e spec.Endpoint) string {
+	if s == nil || s.QuerySync == nil || e.Path != s.QuerySync.Path || e.ResponsePath == "" {
+		return ""
+	}
+	if e.Response.Item != "" {
+		return e.Response.Item
+	}
+	if i := strings.LastIndex(e.ResponsePath, "."); i >= 0 {
+		return e.ResponsePath[i+1:]
+	}
+	return ""
 }
 
 func hasTypedResponseWithoutRuntimeID(resourceName string, endpoint spec.Endpoint, types map[string]spec.TypeDef) bool {
@@ -2071,17 +2670,23 @@ func detectIDWalkParams(endpoint spec.Endpoint) (string, string, int) {
 		return "", "", 0
 	}
 	pageSize := 100
-	if defaultSize, ok := paginationLimitDefault(endpoint); ok {
+	if defaultSize, ok := paginationLimitDefault(endpoint, resolvedLimitParam); ok {
 		pageSize = defaultSize
+	}
+	// Clamp to the body limit param's declared maximum, same as the cursor/page
+	// sync path — an ID-walk POST search endpoint that caps its limit below 100
+	// would otherwise be rejected with a validation error on every page.
+	if maxSize, ok := paginationLimitMaximum(endpoint, resolvedLimitParam); ok && pageSize > maxSize {
+		pageSize = maxSize
 	}
 	return filterParam, resolvedLimitParam, pageSize
 }
 
-func paginationLimitDefault(endpoint spec.Endpoint) (int, bool) {
-	if endpoint.Pagination == nil || strings.TrimSpace(endpoint.Pagination.LimitParam) == "" {
+func paginationLimitDefault(endpoint spec.Endpoint, limitParam string) (int, bool) {
+	if strings.TrimSpace(limitParam) == "" {
 		return 0, false
 	}
-	limitName := strings.ToLower(endpoint.Pagination.LimitParam)
+	limitName := strings.ToLower(limitParam)
 	params := append(append([]spec.Param{}, endpoint.Params...), endpoint.Body...)
 	for _, param := range params {
 		if strings.ToLower(param.Name) != limitName {
@@ -2109,42 +2714,350 @@ func paginationLimitDefault(endpoint spec.Endpoint) (int, bool) {
 	return 0, false
 }
 
-// detectEndpointSinceParam returns the actual query parameter name this
-// endpoint declares for incremental temporal filtering, or "" when none is
-// declared. The match list mirrors the profile-level aggregation in
-// Profile() so per-endpoint detection stays consistent with the
-// PaginationProfile.SinceParam summary.
-func detectEndpointSinceParam(params []spec.Param) string {
-	name, _ := detectEndpointSinceParamAndFormat(params)
-	return name
+// paginationLimitMaximum returns the largest page size the pagination limit
+// param permits, if it declares an upper bound. Sync uses it to clamp the
+// requested page size below an API-enforced ceiling. An inclusive `maximum: N`
+// yields floor(N); an exclusive bound (OpenAPI 3.1 `exclusiveMaximum: N`, or
+// 3.0 `maximum: N` + `exclusiveMaximum: true`) yields ceil(N)-1 so the returned
+// value is always the largest legal integer strictly below the bound.
+func paginationLimitMaximum(endpoint spec.Endpoint, limitParam string) (int, bool) {
+	if strings.TrimSpace(limitParam) == "" {
+		return 0, false
+	}
+	limitName := strings.ToLower(limitParam)
+	params := append(append([]spec.Param{}, endpoint.Params...), endpoint.Body...)
+	for _, param := range params {
+		if strings.ToLower(param.Name) != limitName {
+			continue
+		}
+		// A param may declare both an inclusive `maximum` and an exclusive bound
+		// (independent assertions in OpenAPI 3.1). Take the most restrictive.
+		effMax, have := 0, false
+		if param.Maximum != nil {
+			if m := int(math.Floor(*param.Maximum)); m > 0 {
+				effMax, have = m, true
+			}
+		}
+		if param.ExclusiveMaximum != nil {
+			if m := int(math.Ceil(*param.ExclusiveMaximum)) - 1; m > 0 && (!have || m < effMax) {
+				effMax, have = m, true
+			}
+		}
+		if have {
+			return effMax, true
+		}
+	}
+	return 0, false
 }
 
-func detectEndpointSinceParamFormat(params []spec.Param) string {
-	_, format := detectEndpointSinceParamAndFormat(params)
-	return format
+func syncPaginationDefaultsFromEndpoint(endpoint spec.Endpoint) (string, string, string, int) {
+	cursorParam := ""
+	cursorType := ""
+	limitParam := ""
+	if paginationDisabled(endpoint.Pagination) {
+		return "", "", "", 0
+	}
+	if isRuntimePagination(endpoint.Pagination) {
+		cursorParam = strings.TrimSpace(endpoint.Pagination.CursorParam)
+		cursorType = strings.TrimSpace(endpoint.Pagination.Type)
+		limitParam = strings.TrimSpace(endpoint.Pagination.LimitParam)
+	}
+	if cursorParam == "" || limitParam == "" {
+		inferredCursor, inferredLimit := inferPaginationParamsFromEndpoint(endpoint)
+		if cursorParam == "" {
+			cursorParam = inferredCursor
+		}
+		if limitParam == "" {
+			limitParam = inferredLimit
+		}
+	}
+	if cursorType == "" {
+		cursorType = inferPaginationType(cursorParam)
+	}
+	// Canonical page and offset parameter names are stronger evidence than an
+	// inconsistent explicit type. Letting a page-named cursor reach offset
+	// arithmetic silently repeats page one or skips pages, and the inverse
+	// mismatch makes offset APIs advance with the wrong strategy.
+	inferredType := inferPaginationType(cursorParam)
+	if (inferredType == "page" || inferredType == "offset") &&
+		(cursorType == "page" || cursorType == "offset") {
+		cursorType = inferredType
+	}
+	pageSize := 100
+	if defaultSize, ok := paginationLimitDefault(endpoint, limitParam); ok {
+		pageSize = defaultSize
+	}
+	// Clamp to the limit param's declared maximum so sync never requests a
+	// page size the API rejects with a validation error. An API-declared cap
+	// always wins over the default (e.g. Granola's public API caps page_size
+	// at 30, and a spec may declare a maximum without any default).
+	if maxSize, ok := paginationLimitMaximum(endpoint, limitParam); ok && pageSize > maxSize {
+		pageSize = maxSize
+	}
+	return cursorParam, cursorType, limitParam, pageSize
 }
 
-func detectEndpointSinceParamAndFormat(params []spec.Param) (string, string) {
-	for _, p := range params {
-		name := strings.ToLower(p.Name)
-		if isEndpointSinceParamName(name) {
-			return p.Name, strings.ToLower(strings.TrimSpace(p.Format))
+func inferPaginationParamsFromEndpoint(endpoint spec.Endpoint) (string, string) {
+	var cursorParam string
+	var limitParam string
+	for _, param := range endpoint.Params {
+		if param.PathParam || param.Positional {
+			continue
+		}
+		lower := strings.ToLower(param.Name)
+		if cursorParam == "" && cursorParamCandidates[lower] {
+			cursorParam = param.Name
+		}
+		if limitParam == "" && pageSizeParamCandidates[lower] {
+			limitParam = param.Name
+		}
+	}
+	return cursorParam, limitParam
+}
+
+func inferPaginationType(cursorParam string) string {
+	switch strings.ToLower(strings.TrimSpace(cursorParam)) {
+	case "":
+		return ""
+	case "page", "page_number", "pagenumber", "page[number]":
+		return "page"
+	case "offset", "skip":
+		return "offset"
+	case "page_token", "pagetoken":
+		return "page_token"
+	default:
+		return "cursor"
+	}
+}
+
+// detectEndpointSyncSort finds a spec-declared ordering that makes an
+// incremental page walk safe to checkpoint at the newest stored record. It
+// intentionally requires both temporal and ascending-order evidence; a plain
+// sort parameter is not enough to prove that a capped sync has a monotonic
+// watermark.
+func detectEndpointSyncSort(endpoint spec.Endpoint) (string, string) {
+	sinceParam, _ := detectEndpointSinceParamAndFormat(endpoint, nil)
+	if sinceParam == "" {
+		return "", ""
+	}
+	sinceField := temporalSinceField(sinceParam)
+	for _, param := range endpoint.Params {
+		if param.PathParam || param.Positional || !isSyncSortParamName(param.Name) {
+			continue
+		}
+		defaultValue, hasDefault := stringParamDefault(param.Default)
+		values := make([]string, 0, len(param.Enum)+1)
+		if hasDefault {
+			values = append(values, defaultValue)
+		}
+		values = append(values, param.Enum...)
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			// The wire value must name the temporal field itself. Prose on the
+			// endpoint or sort parameter cannot prove that a generic value such
+			// as name:asc orders by the field used by the since filter.
+			sortField := temporalSortField(value)
+			if sortField == "" || !describesLastModifiedSort(sortField) || !isAscendingSortValue(value) {
+				continue
+			}
+			if !temporalFieldsMatch(sortField, sinceField) {
+				continue
+			}
+			return param.WireName(), value
 		}
 	}
 	return "", ""
 }
 
+func temporalSinceField(name string) string {
+	normalized := normalizeTemporalFieldName(name)
+	for _, suffix := range []string{"after", "since", "gte", "gt", "lte", "lt"} {
+		if prefix, ok := strings.CutSuffix(normalized, suffix); ok {
+			return prefix
+		}
+	}
+	if normalized == "since" {
+		return ""
+	}
+	return normalized
+}
+
+func temporalSortField(value string) string {
+	parts := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(value)), func(r rune) bool {
+		return r == ':' || r == ',' || r == ' ' || r == '\t'
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimLeft(parts[0], "+-")
+}
+
+func temporalFieldsMatch(a, b string) bool {
+	a = normalizeTemporalFieldName(a)
+	b = normalizeTemporalFieldName(b)
+	if a == b {
+		return true
+	}
+	for _, suffix := range []string{"at", "date", "time"} {
+		if strings.TrimSuffix(a, suffix) == b || strings.TrimSuffix(b, suffix) == a {
+			return true
+		}
+	}
+	return false
+}
+
+func isSyncSortParamName(name string) bool {
+	switch normalizeTemporalFieldName(name) {
+	case "sort", "sortby", "order", "orderby", "ordering":
+		return true
+	default:
+		return false
+	}
+}
+
+func stringParamDefault(value any) (string, bool) {
+	if value == nil {
+		return "", false
+	}
+	text, ok := value.(string)
+	return text, ok && strings.TrimSpace(text) != ""
+}
+
+func describesLastModifiedSort(text string) bool {
+	return containsAny(text, []string{
+		"updated", "modified", "last changed", "lastchanged", "last_modified", "lastmodified",
+	})
+}
+
+func isAscendingSortValue(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return lower == "asc" || strings.Contains(lower, "ascending") ||
+		strings.Contains(lower, ":asc") || strings.HasSuffix(lower, "_asc") ||
+		strings.HasPrefix(lower, "+") || strings.Contains(lower, "oldest")
+}
+
+func detectEndpointSinceParamAndFormat(endpoint spec.Endpoint, types map[string]spec.TypeDef) (string, string) {
+	for _, p := range endpoint.Params {
+		name := strings.ToLower(p.Name)
+		if isEndpointSinceParamName(name) {
+			return p.Name, strings.ToLower(strings.TrimSpace(p.Format))
+		}
+	}
+	for _, p := range endpoint.Params {
+		if strings.EqualFold(strings.TrimSpace(p.Name), "conditions") {
+			if field := detectODataConditionsTimestampField(endpoint, types); field != "" {
+				return p.Name, "odata-conditions:" + field
+			}
+		}
+	}
+	return "", ""
+}
+
+func detectODataConditionsTimestampField(endpoint spec.Endpoint, types map[string]spec.TypeDef) string {
+	typeName := strings.TrimSpace(endpoint.Response.Item)
+	if typeName == "" || types == nil {
+		return ""
+	}
+	typeDef, ok := types[typeName]
+	if !ok {
+		return ""
+	}
+	for _, field := range typeDef.Fields {
+		if field.Name == "_info/lastUpdated" {
+			return field.Name
+		}
+	}
+	for _, candidate := range []string{
+		"lastUpdated",
+		"updated_at",
+		"updatedAt",
+		"modified_at",
+		"modifiedAt",
+		"last_modified",
+		"lastModified",
+		"date_updated",
+		"dateUpdated",
+		"updated_date",
+		"modified_date",
+	} {
+		if field := responseTypeFieldByNormalizedName(typeDef, candidate); field != "" {
+			return field
+		}
+	}
+	for _, field := range typeDef.Fields {
+		if strings.TrimSpace(field.Name) == "_info" && strings.EqualFold(strings.TrimSpace(field.Type), "object") {
+			return "_info/lastUpdated"
+		}
+	}
+	for _, field := range typeDef.Fields {
+		name := strings.ToLower(field.Name)
+		format := strings.ToLower(strings.TrimSpace(field.Format))
+		if (format == "date" || format == "date-time") && (strings.Contains(name, "updated") || strings.Contains(name, "modified")) {
+			return field.Name
+		}
+	}
+	return ""
+}
+
+func responseTypeFieldByNormalizedName(typeDef spec.TypeDef, candidate string) string {
+	normalizedCandidate := normalizeTemporalFieldName(candidate)
+	for _, field := range typeDef.Fields {
+		if normalizeTemporalFieldName(field.Name) == normalizedCandidate {
+			return field.Name
+		}
+	}
+	return ""
+}
+
+func normalizeTemporalFieldName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func isEndpointSinceParamName(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
-	return strings.Contains(name, "since") ||
-		strings.Contains(name, "updated_after") ||
-		strings.Contains(name, "modified_since") ||
+	normalized := normalizeTemporalFieldName(name)
+	if strings.Contains(normalized, "since") ||
+		strings.Contains(normalized, "updatedafter") ||
+		strings.Contains(normalized, "modifiedafter") ||
+		strings.Contains(normalized, "createdafter") ||
 		strings.Contains(name, "updated_at") ||
 		name == "start_date" ||
 		name == "start_datetime" ||
 		name == "start_time" ||
 		name == "from_date" ||
-		name == "from_datetime"
+		name == "from_datetime" {
+		return true
+	}
+	base, op, ok := strings.Cut(name, "__")
+	if !ok {
+		return false
+	}
+	switch op {
+	case "gt", "gte", "lt", "lte":
+		return isTemporalComparisonBase(base)
+	default:
+		return false
+	}
+}
+
+func isTemporalComparisonBase(base string) bool {
+	normalized := normalizeTemporalFieldName(base)
+	switch normalized {
+	case "updated", "modified", "created", "updatedat", "modifiedat", "createdat", "updateddate", "modifieddate", "createddate":
+		return true
+	default:
+		base = strings.ToLower(strings.TrimSpace(base))
+		return strings.HasSuffix(base, "_at") || strings.HasSuffix(base, "_date")
+	}
 }
 
 func detectEndpointFieldSelector(endpoint spec.Endpoint) FieldSelector {
@@ -2163,6 +3076,9 @@ func detectEndpointFieldSelector(endpoint spec.Endpoint) FieldSelector {
 }
 
 func endpointSupportsPagination(endpoint spec.Endpoint) bool {
+	if paginationDisabled(endpoint.Pagination) {
+		return false
+	}
 	if endpoint.Pagination != nil &&
 		(strings.TrimSpace(endpoint.Pagination.LimitParam) != "" ||
 			strings.TrimSpace(endpoint.Pagination.CursorParam) != "") {
@@ -2177,6 +3093,14 @@ func endpointSupportsPagination(endpoint spec.Endpoint) bool {
 		}
 	}
 	return false
+}
+
+func paginationDisabled(p *spec.Pagination) bool {
+	return p != nil && p.Type == spec.PaginationTypeNone
+}
+
+func isRuntimePagination(p *spec.Pagination) bool {
+	return p != nil && p.Type != spec.PaginationTypeIDWalk && p.Type != spec.PaginationTypeNone
 }
 
 func applySyncCandidates(syncable map[string]syncableMeta, candidates map[string][]syncableCandidate) {
@@ -2423,24 +3347,36 @@ func sortedSyncableResources(m map[string]syncableMeta) []SyncableResource {
 	for i, name := range names {
 		meta := m[name]
 		resources[i] = SyncableResource{
-			Name:               name,
-			Path:               meta.Path,
-			Method:             meta.Method,
-			Tier:               meta.Tier,
-			SkipDefaultSync:    meta.SkipDefaultSync,
-			IDField:            meta.IDField,
-			Critical:           meta.Critical,
-			SinceParam:         meta.SinceParam,
-			SinceParamFormat:   meta.SinceParamFormat,
-			SupportsPagination: meta.SupportsPagination,
-			UsesHTMLResponse:   meta.UsesHTMLResponse,
-			HTMLExtract:        meta.HTMLExtract,
-			BodyFields:         meta.BodyFields,
-			IDWalkFilterParam:  meta.IDWalkFilterParam,
-			IDWalkLimitParam:   meta.IDWalkLimitParam,
-			IDWalkPageSize:     meta.IDWalkPageSize,
-			FieldSelector:      meta.FieldSelector,
-			Discriminator:      meta.Discriminator,
+			Name:                  name,
+			Path:                  meta.Path,
+			Method:                meta.Method,
+			Tier:                  meta.Tier,
+			SkipDefaultSync:       meta.SkipDefaultSync,
+			IDField:               meta.IDField,
+			Critical:              meta.Critical,
+			SinceParam:            meta.SinceParam,
+			SinceParamFormat:      meta.SinceParamFormat,
+			SupportsPagination:    meta.SupportsPagination,
+			PaginationCursorParam: meta.PaginationCursorParam,
+			PaginationCursorType:  meta.PaginationCursorType,
+			PaginationLimitParam:  meta.PaginationLimitParam,
+			PaginationPageSize:    meta.PaginationPageSize,
+			PaginationSortParam:   meta.PaginationSortParam,
+			PaginationSortValue:   meta.PaginationSortValue,
+			PaginationSortField:   meta.PaginationSortField,
+			UsesHTMLResponse:      meta.UsesHTMLResponse,
+			HTMLExtract:           meta.HTMLExtract,
+			BodyFields:            meta.BodyFields,
+			IDWalkFilterParam:     meta.IDWalkFilterParam,
+			IDWalkLimitParam:      meta.IDWalkLimitParam,
+			IDWalkPageSize:        meta.IDWalkPageSize,
+			FieldSelector:         meta.FieldSelector,
+			Discriminator:         meta.Discriminator,
+			QueryEntity:           meta.QueryEntity,
+			TenantScopeColumn:     meta.TenantScopeColumn,
+			HydratePath:           meta.HydratePath,
+			HydrateIDParam:        meta.HydrateIDParam,
+			MembershipField:       meta.MembershipField,
 		}
 	}
 	return resources
@@ -2575,4 +3511,23 @@ func mostCommon(counts map[string]int, fallback string) string {
 		}
 	}
 	return best
+}
+
+func mostCommonSort(counts map[string]int) (string, string) {
+	best := ""
+	bestCount := 0
+	for key, count := range counts {
+		if count > bestCount || (count == bestCount && count > 0 && (best == "" || key < best)) {
+			best = key
+			bestCount = count
+		}
+	}
+	if best == "" {
+		return "", ""
+	}
+	param, value, ok := strings.Cut(best, "\x00")
+	if !ok {
+		return "", ""
+	}
+	return param, value
 }

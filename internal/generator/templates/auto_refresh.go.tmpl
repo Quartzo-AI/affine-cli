@@ -96,6 +96,12 @@ func autoRefreshIfStale(ctx context.Context, flags *rootFlags, resources []strin
 		meta.Reason = "no_resources"
 		return meta
 	}
+{{- if .Learn.Enabled}}
+	if noLearnActive(flags) {
+		meta.Reason = "no_learn"
+		return meta
+	}
+{{- end}}
 	policy := cachePolicy()
 	if policy.EnvOptOut != "" && os.Getenv(policy.EnvOptOut) == "1" {
 		meta.Decision = "skipped"
@@ -210,7 +216,15 @@ func runAutoRefresh(ctx context.Context, flags *rootFlags, db *store.Store, reso
 			return ctx.Err()
 		default:
 		}
-		result := syncResource(ctx, {{if .HasTierRouting}}syncClientForResource(c, resource){{else}}c{{end}}, db, resource, "", false, 1, true{{if .Pagination.DateRangeParam}}, ""{{end}}{{if not (isGraphQL .APISpec)}}, nil, os.Stderr{{end}})
+{{- if eq .Name "substack"}}
+		if resource == "drafts" {
+			if err := resolveSubstackPublicationIDTemplate(ctx, c, flags); err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", resource, err))
+				continue
+			}
+		}
+{{- end}}
+		result := syncResource(ctx, {{if .HasTierRouting}}syncClientForResource(c, resource){{else}}c{{end}}, db, resource, "", false, 1, true{{if not (isGraphQL .APISpec)}}, false{{end}}{{if .Pagination.DateRangeParam}}, ""{{end}}{{if not (isGraphQL .APISpec)}}, nil, os.Stderr{{end}})
 		if result.Err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", resource, result.Err))
 		}

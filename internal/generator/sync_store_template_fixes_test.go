@@ -96,9 +96,19 @@ import (
 )
 
 func TestCurrencyCodeSuffixExtractsResourceID(t *testing.T) {
+	if got := ExtractResourceID("spots", map[string]any{"_id": "mongo-1"}); got != "mongo-1" {
+		t.Fatalf("MongoDB _id fallback = %q, want mongo-1", got)
+	}
+	if got := ExtractResourceID("spots", map[string]any{"_id": map[string]any{"$oid": "mongo-object-1"}, "name": "Jack's"}); got != "mongo-object-1" {
+		t.Fatalf("MongoDB Extended JSON _id fallback = %q, want mongo-object-1", got)
+	}
+	if got := ExtractResourceID("spots", map[string]any{"id": "canonical-1", "name": "Jack's"}); got != "canonical-1" {
+		t.Fatalf("stable id must win over display name, got %q", got)
+	}
+
 	obj := map[string]any{"currency_code": "USD", "name": "US Dollar"}
-	if got := ExtractResourceID("currencies", obj); got != "US Dollar" {
-		t.Fatalf("exact fallback should still prefer name before suffix scan, got %q", got)
+	if got := ExtractResourceID("currencies", obj); got != "USD" {
+		t.Fatalf("resource-specific id must win over display name, got %q", got)
 	}
 
 	obj = map[string]any{"currency_code": "USD", "symbol": "$"}
@@ -164,6 +174,26 @@ func TestCurrencyCodeSuffixExtractsResourceID(t *testing.T) {
 	}
 	if len(rows) != 1 {
 		t.Fatalf("stored rows = %d, want 1", len(rows))
+	}
+
+	items = []json.RawMessage{
+		json.RawMessage(` + "`" + `{"_id":"spot-1","name":"Jack's"}` + "`" + `),
+		json.RawMessage(` + "`" + `{"_id":"spot-2","name":"Jack's"}` + "`" + `),
+		json.RawMessage(` + "`" + `{"_id":{"$oid":"spot-3"},"name":"Jack's"}` + "`" + `),
+	}
+	stored, failures, err = db.UpsertBatch("spots", items)
+	if err != nil {
+		t.Fatalf("upsert MongoDB rows: %v", err)
+	}
+	if stored != 3 || failures != 0 {
+		t.Fatalf("MongoDB stored/failures = %d/%d, want 3/0", stored, failures)
+	}
+	rows, err = db.List("spots", 10)
+	if err != nil {
+		t.Fatalf("list spots: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("MongoDB rows = %d, want 3 distinct rows", len(rows))
 	}
 }
 `
@@ -273,7 +303,7 @@ func TestSyncResourceNonJSONBodyEmitsAnomaly(t *testing.T) {
 	defer db.Close()
 
 	var events bytes.Buffer
-	res := syncResource(context.Background(), fixedBodyClient{body: json.RawMessage(` + "`" + `<html><body>wrong app</body></html>` + "`" + `)}, db, "things", "", false, 1, false, nil, &events)
+	res := syncResource(context.Background(), fixedBodyClient{body: json.RawMessage(` + "`" + `<html><body>wrong app</body></html>` + "`" + `)}, db, "things", "", false, 1, false, false, nil, &events)
 	if res.Err != nil {
 		t.Fatalf("syncResource error: %v", res.Err)
 	}
@@ -290,7 +320,7 @@ func TestSyncResourceValidEmptyJSONDoesNotEmitNonJSONAnomaly(t *testing.T) {
 	defer db.Close()
 
 	var events bytes.Buffer
-	res := syncResource(context.Background(), fixedBodyClient{body: json.RawMessage(` + "`" + `[]` + "`" + `)}, db, "things", "", false, 1, false, nil, &events)
+	res := syncResource(context.Background(), fixedBodyClient{body: json.RawMessage(` + "`" + `[]` + "`" + `)}, db, "things", "", false, 1, false, false, nil, &events)
 	if res.Err != nil {
 		t.Fatalf("syncResource error: %v", res.Err)
 	}
@@ -316,7 +346,7 @@ func TestSyncDependentResourceNonJSONBodyEmitsAnomaly(t *testing.T) {
 		fixedBodyClient{body: json.RawMessage(` + "`" + `<html><body>wrong app</body></html>` + "`" + `)},
 		db,
 		dependentResourceDef{Name: "children", ParentTable: "parents", ParentIDParam: "parentId", PathTemplate: "/parents/{parentId}/children"},
-		"", false, 1, false, nil, &events,
+		"", false, 1, false, false, nil, &events, 1,
 	)
 	if res.Err != nil {
 		t.Fatalf("syncDependentResource error: %v", res.Err)

@@ -58,6 +58,8 @@ func TestSkillRendersFrontmatterAndCapabilities(t *testing.T) {
 		"frontmatter description should incorporate headline")
 	assert.True(t, strings.Contains(content, "`quote AAPL`"),
 		"frontmatter description should list domain-specific trigger phrases verbatim (backtick-delimited)")
+	assert.True(t, strings.Contains(content, "library/commerce/finance/cmd/finance-pp-cli"),
+		"openclaw install manifest should use the API's category and slug-only directory")
 	assert.True(t, strings.Contains(content, `regions: ["US", "*"]`),
 		"frontmatter should expose structured geographic scope")
 	assert.True(t, strings.Contains(content, `api_language: "en-US"`),
@@ -347,7 +349,7 @@ func TestCompactDescriptionPrefersCLIShapedCopy(t *testing.T) {
 	assert.NotContains(t, string(goreleaser), "# Introduction")
 }
 
-func TestCatalogDescriptionPreservesCompleteLongCopy(t *testing.T) {
+func TestManifestDescriptionPreservesCompleteLongCopy(t *testing.T) {
 	t.Parallel()
 
 	apiSpec := minimalSpec("longcopy")
@@ -355,10 +357,10 @@ func TestCatalogDescriptionPreservesCompleteLongCopy(t *testing.T) {
 	outputDir := filepath.Join(t.TempDir(), "longcopy-pp-cli")
 	gen := New(apiSpec, outputDir)
 
-	assert.Equal(t, apiSpec.CLIDescription, gen.CatalogDescription())
+	assert.Equal(t, apiSpec.CLIDescription, gen.ManifestDescription())
 }
 
-func TestCatalogDescriptionSkipsLiteralEllipsisCandidates(t *testing.T) {
+func TestManifestDescriptionSkipsLiteralEllipsisCandidates(t *testing.T) {
 	t.Parallel()
 
 	apiSpec := minimalSpec("longcopy")
@@ -366,7 +368,7 @@ func TestCatalogDescriptionSkipsLiteralEllipsisCandidates(t *testing.T) {
 	apiSpec.Description = "Complete fallback sentence."
 	gen := New(apiSpec, filepath.Join(t.TempDir(), "longcopy-pp-cli"))
 
-	assert.Equal(t, "Complete fallback sentence.", gen.CatalogDescription())
+	assert.Equal(t, "Complete fallback sentence.", gen.ManifestDescription())
 }
 
 // TestSkillRendersAuthBranchPerType asserts the deterministic Auth Setup
@@ -405,6 +407,26 @@ func TestSkillRendersAuthBranchPerType(t *testing.T) {
 				"auth-type %q should produce %q in SKILL.md Auth Setup", tc.authType, tc.expect)
 		})
 	}
+}
+
+func TestSkillAuthSetupPrefersNarrativeEvenWhenSpecAuthIsNone(t *testing.T) {
+	t.Parallel()
+
+	apiSpec := minimalSpec("tierfree")
+	apiSpec.Auth = spec.AuthConfig{Type: "none"}
+	outputDir := filepath.Join(t.TempDir(), "tierfree-pp-cli")
+	gen := New(apiSpec, outputDir)
+	gen.Narrative = &ReadmeNarrative{
+		AuthNarrative: "Most commands are public, but premium download routes require `AA_API_KEY`.",
+	}
+	require.NoError(t, gen.Generate())
+
+	skill, err := os.ReadFile(filepath.Join(outputDir, "SKILL.md"))
+	require.NoError(t, err)
+	content := string(skill)
+
+	assert.Contains(t, content, "Most commands are public, but premium download routes require `AA_API_KEY`.")
+	assert.NotContains(t, content, "No authentication required.")
 }
 
 // TestSkillRendersExtraCommands asserts that hand-written commands declared
@@ -481,10 +503,12 @@ func TestSkillRendersExtraCommands(t *testing.T) {
 		"Hand-written Extensions must come after ### Finding the right command so it doesn't reparent that subsection")
 }
 
-// TestSkillFrontmatterOmitsHostSpecificMetadata asserts that generated
-// SKILL.md frontmatter stays host-neutral. Install instructions belong in the
-// README and generic prerequisites, not in a host-specific metadata block.
-func TestSkillFrontmatterOmitsHostSpecificMetadata(t *testing.T) {
+// TestSkillFrontmatterMetadataIsClawHubCompliantNestedYAML asserts that the
+// emitted metadata block parses as nested YAML conforming to ClawHub's
+// SkillInstallSpec schema (kind: go, module:, no kind: shell, no command:,
+// no id:, no label:). The shape was verified directly against
+// packages/schema/src/schemas.ts in the openclaw/clawhub repo.
+func TestSkillFrontmatterMetadataIsClawHubCompliantNestedYAML(t *testing.T) {
 	t.Parallel()
 
 	apiSpec := minimalSpec("widget")
@@ -496,18 +520,58 @@ func TestSkillFrontmatterOmitsHostSpecificMetadata(t *testing.T) {
 	skill, err := os.ReadFile(filepath.Join(outputDir, "SKILL.md"))
 	require.NoError(t, err)
 	content := string(skill)
-	content = strings.ReplaceAll(content, "\r\n", "\n")
 
+	// Extract frontmatter and parse as YAML.
 	require.True(t, strings.HasPrefix(content, "---\n"))
 	end := strings.Index(content[4:], "\n---\n")
 	require.NotEqual(t, -1, end)
 	body := strings.TrimSuffix(strings.TrimPrefix(content[:4+end+5], "---\n"), "---\n")
 
-	var parsed map[string]any
+	var parsed struct {
+		Metadata struct {
+			Openclaw struct {
+				Requires struct {
+					Bins []string `yaml:"bins"`
+				} `yaml:"requires"`
+				Install []struct {
+					Kind   string   `yaml:"kind"`
+					Bins   []string `yaml:"bins"`
+					Module string   `yaml:"module"`
+					// Fields that MUST NOT appear:
+					Command string `yaml:"command"`
+					ID      string `yaml:"id"`
+					Label   string `yaml:"label"`
+				} `yaml:"install"`
+			} `yaml:"openclaw"`
+		} `yaml:"metadata"`
+	}
 	require.NoError(t, yaml.Unmarshal([]byte(body), &parsed),
-		"frontmatter must parse as YAML; content was:\n%s", body)
-	assert.NotContains(t, body, "metadata:",
-		"host-specific install metadata should not be emitted in generated SKILL.md frontmatter")
+		"frontmatter must parse as nested YAML; content was:\n%s", body)
+
+	// Schema-compliance assertions.
+	assert.Equal(t, []string{"widget-pp-cli"}, parsed.Metadata.Openclaw.Requires.Bins,
+		"requires.bins should carry the CLI binary name")
+	require.Len(t, parsed.Metadata.Openclaw.Install, 1, "exactly one install entry expected")
+	entry := parsed.Metadata.Openclaw.Install[0]
+	assert.Equal(t, "go", entry.Kind, "kind must be 'go' (ClawHub schema enum: brew|node|go|uv)")
+	assert.Equal(t, []string{"widget-pp-cli"}, entry.Bins)
+	assert.Equal(t,
+		"github.com/mvanhorn/printing-press-library/library/commerce/widget/cmd/widget-pp-cli",
+		entry.Module,
+		"module must be the slug-only directory path matching the published library convention; cmd subdir uses the binary name")
+	assert.Empty(t, entry.Command, "command field must not be emitted (not in ClawHub schema)")
+	assert.Empty(t, entry.ID, "id field must not be emitted (optional, no semantic value here)")
+	assert.Empty(t, entry.Label, "label field must not be emitted (optional, no semantic value here)")
+
+	// Negative assertions on raw text — catch any regression to the old shape.
+	assert.NotContains(t, content, `kind: shell`,
+		"kind: shell is invalid per ClawHub schema; must never appear")
+	assert.NotContains(t, content, `kind: "shell"`,
+		"kind: shell is invalid per ClawHub schema; must never appear")
+	assert.NotContains(t, body, `"command":`,
+		"command field is not in ClawHub schema; must never appear in metadata")
+	assert.NotContains(t, content, `\"openclaw\":`,
+		"metadata must not be a JSON-string blob anymore")
 }
 
 // TestGenerateSoftFallsBackOnEmptyOwnerName asserts the empty-OwnerName
@@ -553,7 +617,7 @@ func TestGenerateSoftFallsBackOnEmptyOwnerName(t *testing.T) {
 
 // TestSkillFrontmatterEmitsHermesTopLevelFields asserts the post-alignment
 // frontmatter carries the Hermes-recognized top-level fields (`version`,
-// `author`, `license`) so Hermes can install the skill. The legacy agent host block
+// `author`, `license`) so Hermes can install the skill. The OpenClaw block
 // continues to coexist alongside; Hermes ignores unknown keys per its docs.
 func TestSkillFrontmatterEmitsHermesTopLevelFields(t *testing.T) {
 	t.Parallel()
@@ -599,7 +663,7 @@ func TestSkillFrontmatterEmitsHermesTopLevelFields(t *testing.T) {
 }
 
 // TestSkillFrontmatterOmitsAllEnvVarDeclarations asserts the post-Hermes-
-// alignment shape: neither legacy agent host `requires.env` nor `envVars`, nor the
+// alignment shape: neither OpenClaw `requires.env` nor `envVars`, nor the
 // legacy `primaryEnv`, appears in printed-CLI SKILL.md frontmatter. The
 // classification problem (user-set vs harvested) is asymmetric on failure
 // — a false-positive on a harvested var (e.g., a session cookie) prompts

@@ -56,6 +56,13 @@ func (g *Generator) Validate() error {
 			},
 		},
 		{
+			name: "go test ./...",
+			run: func() error {
+				_, err := runCommand(g.OutputDir, qualityGateTimeout, "go", "test", "-count=1", "./...")
+				return err
+			},
+		},
+		{
 			name: "govulncheck ./...",
 			run: func() error {
 				env := govulncheck.ToolchainEnv(g.OutputDir)
@@ -73,14 +80,14 @@ func (g *Generator) Validate() error {
 		{
 			name: "go build ./...",
 			run: func() error {
-				_, err := runCommand(g.OutputDir, qualityGateTimeout, "go", "build", "./...")
+				_, err := runCommand(g.OutputDir, qualityGateTimeout, "go", "build", "-trimpath", "-ldflags=-buildid=", "./...")
 				return err
 			},
 		},
 		{
 			name: "build runnable binary",
 			run: func() error {
-				_, err := runCommand(g.OutputDir, qualityGateTimeout, "go", "build", "-o", binPath, "./cmd/"+naming.CLI(g.Spec.Name))
+				_, err := runCommand(g.OutputDir, qualityGateTimeout, "go", "build", "-trimpath", "-ldflags=-buildid=", "-o", binPath, "./cmd/"+naming.CLI(g.Spec.Name))
 				return err
 			},
 		},

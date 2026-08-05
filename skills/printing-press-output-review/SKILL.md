@@ -12,6 +12,7 @@ user-invocable: false
 allowed-tools:
   - Bash
   - Agent
+created_by: user
 ---
 
 # printing-press-output-review (internal)
@@ -59,6 +60,12 @@ cli-printing-press scorecard --dir "$CLI_DIR" "${RESEARCH_ARGS[@]}" --live-check
 
 If the scorecard call fails or `/tmp/output-review-livecheck.json` is empty, return the SKIP result (Step 3) without dispatching the reviewer.
 
+Before dispatch, count entries in `live_check.features[]` whose `status` is
+`pass`. If there are zero, return `SKIP` with the reason `no eligible passing
+samples; plausibility not assessed`. Do not dispatch the reviewer, and never
+report a clean `PASS` merely because all sampled commands failed or were
+excluded from review.
+
 ### Step 2: Dispatch the reviewer agent
 
 Use the Agent tool (general-purpose) with this prompt contract:
@@ -77,6 +84,8 @@ Use the Agent tool (general-purpose) with this prompt contract:
 > 3. **Aggregation commands show all requested sources.** For commands with a `--source`/`--site`/`--region` CSV flag: if the user requested N sources, does output show N, or does stderr explain the missing ones? Silent drops of failed sources are a top failure mode for fan-out commands.
 > 4. **Result ordering/ranking makes sense.** For commands that claim to rank or sort, does the top result look plausibly best given the query? Watch for broken score weights, off-by-one sort bugs, and silent fallback to recency when relevance computation fails.
 >
+> Calibration for learn-loop command samples (`recall`, `learnings`, `playbook`): on a fresh print the local learning store starts empty, so empty candidate lists, zero-count `learnings stats`, and "no learnings recorded" outputs are plausible-correct. Do not flag them as silent failures or missing data.
+>
 > Return a list of findings. For each: check name, severity (`warning` in Wave B; `error` reserved for Wave C), one-line description, one-sentence fix suggestion. If the CLI passes all four checks, return "PASS — no findings."
 
 ### Step 3: Emit the structured result block
@@ -84,6 +93,9 @@ Use the Agent tool (general-purpose) with this prompt contract:
 End the skill response with a `---OUTPUT-REVIEW-RESULT---` block the parent parses:
 
 **On clean pass:**
+
+Use this result only when the reviewer assessed at least one eligible
+`status: pass` sample.
 
 ```
 ---OUTPUT-REVIEW-RESULT---
@@ -106,7 +118,7 @@ findings:
 ---END-OUTPUT-REVIEW-RESULT---
 ```
 
-**On reviewer failure (timeout, agent-budget exhaustion, missing live-check data):**
+**On reviewer failure or absence of assessable output (timeout, agent-budget exhaustion, missing live-check data, or zero eligible `status: pass` samples):**
 
 ```
 ---OUTPUT-REVIEW-RESULT---

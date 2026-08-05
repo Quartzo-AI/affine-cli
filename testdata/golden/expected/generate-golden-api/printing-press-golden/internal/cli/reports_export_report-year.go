@@ -12,37 +12,55 @@ import (
 )
 
 func newReportsExportReportYearCmd(flags *rootFlags) *cobra.Command {
+	var flagXApiVersion string
 	var flagYear int
 
 	cmd := &cobra.Command{
-		Use:         "report-year",
-		Aliases:     []string{"get"},
-		Short:       "Download the annual report as a binary file",
-		Example:     "  printing-press-golden-pp-cli reports export report-year --year 42",
+		Use:     "report-year",
+		Aliases: []string{"get"},
+		Short:   "Download the annual report as a binary file",
+		// TODO: replace placeholder example values before relying on this for live dogfood.
+		Example:     "  printing-press-golden-pp-cli reports export report-year --x-api-version example-value --year 42",
 		Annotations: map[string]string{"pp:endpoint": "export.report-year", "pp:method": "GET", "pp:path": "/reports/{year}/export", "mcp:read-only": "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Bare invocation of a command with required input prints help
 			// instead of pflag's terse "required flag not set" error. Optional-
 			// only read commands fall through so a bare call still executes.
-			if cmd.Flags().NFlag() == 0 && len(args) == 0 && !flags.dryRun {
+			// Machine callers (--json/--agent, which sets asJSON) get a usage
+			// error + exit 2 instead of silent exit-0 help, so an incomplete
+			// invocation is never mistaken for success.
+			if !hasChangedLocalFlags(cmd) && len(args) == 0 && !flags.dryRun {
+				if flags.asJSON {
+					if printErr := printJSONFiltered(cmd.OutOrStdout(), map[string]any{
+						"error": "requires input",
+						"usage": cmd.CommandPath() + " --help",
+					}, flags); printErr != nil {
+						return printErr
+					}
+					return usageErr(fmt.Errorf("%q requires input; run %q for usage", cmd.CommandPath(), cmd.CommandPath()+" --help"))
+				}
 				return cmd.Help()
 			}
 			if !cmd.Flags().Changed("year") && !flags.dryRun {
 				return fmt.Errorf("required flag \"%s\" not set", "year")
 			}
+			path := "/reports/{year}/export"
 			c, err := flags.newClient()
 			if err != nil {
 				return err
 			}
-
-			path := "/reports/{year}/export"
 			path = replacePathParam(path, "year", formatCLIParamValue(flagYear))
 			headerOverrides := map[string]string{
 				"Accept":                           "application/octet-stream",
 				"X-Printing-Press-Binary-Response": "true",
 			}
+
+			if cmd.Flags().Changed("x-api-version") || flagXApiVersion != "" {
+				headerOverrides["X-Api-Version"] = formatCLIParamValue(flagXApiVersion)
+			}
+
 			params := map[string]string{}
-			data, prov, err := resolveReadWithStrategy(cmd.Context(), c, flags, "auto", "export", false, path, params, headerOverrides, cmd.ErrOrStderr())
+			data, prov, err := resolveReadWithStrategyAndResponsePath(cmd.Context(), c, flags, "live", "export", false, path, params, headerOverrides, "", cmd.ErrOrStderr())
 			if err != nil {
 				return classifyAPIError(err, flags)
 			}
@@ -59,6 +77,7 @@ func newReportsExportReportYearCmd(flags *rootFlags) *cobra.Command {
 			return err
 		},
 	}
+	cmd.Flags().StringVar(&flagXApiVersion, "x-api-version", "2026-04-01", "Required API version header.")
 	cmd.Flags().IntVar(&flagYear, "year", 0, "Year")
 
 	return cmd

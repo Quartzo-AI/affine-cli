@@ -12,41 +12,63 @@ import (
 )
 
 func newProjectsAvatarUploadProjectCmd(flags *rootFlags) *cobra.Command {
+	var flagXApiVersion string
 	var flagOverwrite bool
 	var bodyCaption string
 	var bodyFile string
 
 	cmd := &cobra.Command{
-		Use:         "upload-project <projectId>",
-		Aliases:     []string{"update"},
-		Short:       "Upload project avatar",
-		Example:     "  printing-press-golden-pp-cli projects avatar upload-project 550e8400-e29b-41d4-a716-446655440000",
+		Use:     "upload-project <projectId>",
+		Aliases: []string{"update"},
+		Short:   "Upload project avatar",
+		// TODO: replace placeholder example values before relying on this for live dogfood.
+		Example:     "  printing-press-golden-pp-cli projects avatar upload-project 550e8400-e29b-41d4-a716-446655440000 --x-api-version example-value",
 		Annotations: map[string]string{"pp:endpoint": "avatar.upload-project", "pp:method": "PUT", "pp:path": "/projects/{projectId}/avatar"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return cmd.Help()
+				// A missing required positional is a usage error in every output
+				// mode (matches command_promoted.go.tmpl). Machine callers
+				// (--json/--agent) also get a JSON error envelope on stdout;
+				// usageErr sets exit 2.
+				if flags.asJSON {
+					if printErr := printJSONFiltered(cmd.OutOrStdout(), map[string]any{
+						"error": "missing required argument",
+						"usage": fmt.Sprintf("%s%s", cmd.CommandPath(), " <projectId>"),
+					}, flags); printErr != nil {
+						return printErr
+					}
+				}
+				return usageErr(fmt.Errorf("missing required argument\nUsage: %s%s", cmd.CommandPath(), " <projectId>"))
 			}
+			path := "/projects/{projectId}/avatar"
+			if len(args) < 1 || args[0] == "" {
+				return usageErr(fmt.Errorf("projectId is required\nUsage: %s <%s>", cmd.CommandPath(), "projectId"))
+			}
+			path = replacePathParam(path, "projectId", args[0])
 			c, err := flags.newClient()
 			if err != nil {
 				return err
 			}
+			headerOverrides := map[string]string{}
 
-			path := "/projects/{projectId}/avatar"
-			path = replacePathParam(path, "projectId", args[0])
+			if cmd.Flags().Changed("x-api-version") || flagXApiVersion != "" {
+				headerOverrides["X-Api-Version"] = formatCLIParamValue(flagXApiVersion)
+			}
+
 			params := map[string]string{}
-			if flagOverwrite != false {
+			if cmd.Flags().Changed("overwrite") || flagOverwrite != false {
 				params["overwrite"] = formatCLIParamValue(flagOverwrite)
 			}
 			fields := map[string]string{}
 			fileFields := map[string]string{}
-			if bodyCaption != "" {
+			if cmd.Flags().Changed("caption") || bodyCaption != "" {
 				fields["caption"] = bodyCaption
 			}
-			if bodyFile != "" {
+			if cmd.Flags().Changed("file") || bodyFile != "" {
 				fileFields["file"] = bodyFile
 			}
 
-			data, statusCode, err := c.PutMultipartWithParams(cmd.Context(), path, params, fields, fileFields)
+			data, statusCode, err := c.PutMultipartWithParamsAndHeaders(cmd.Context(), path, params, fields, fileFields, headerOverrides)
 			if err != nil {
 				return classifyAPIError(err, flags)
 			}
@@ -113,6 +135,9 @@ func newProjectsAvatarUploadProjectCmd(flags *rootFlags) *cobra.Command {
 					"status":   statusCode,
 					"success":  statusCode >= 200 && statusCode < 300 && (partialFailure == nil || flags.allowPartialFailure),
 				}
+				if flags.agent {
+					envelope["meta"] = map[string]any{"source": "live"}
+				}
 				if partialFailure != nil {
 					envelope["partial_failure"] = partialFailure
 				}
@@ -151,14 +176,26 @@ func newProjectsAvatarUploadProjectCmd(flags *rootFlags) *cobra.Command {
 				if len(filtered) > 0 {
 					var parsed any
 					if err := json.Unmarshal(filtered, &parsed); err == nil {
-						envelope["data"] = parsed
+						if flags.agent {
+							envelope["results"] = parsed
+						} else {
+							envelope["data"] = parsed
+						}
 					}
 				}
 				envelopeJSON, err := json.Marshal(envelope)
 				if err != nil {
 					return err
 				}
-				if perr := printOutput(cmd.OutOrStdout(), json.RawMessage(envelopeJSON), true); perr != nil {
+				resultKey := "data"
+				if flags.agent {
+					resultKey = "results"
+				}
+				structured, err := wrapPlatformStructuredOutput(json.RawMessage(envelopeJSON), flags, resultKey, true)
+				if err != nil {
+					return err
+				}
+				if perr := printOutput(cmd.OutOrStdout(), structured, true); perr != nil {
 					return perr
 				}
 				if partialFailure != nil && !flags.allowPartialFailure {
@@ -182,6 +219,7 @@ func newProjectsAvatarUploadProjectCmd(flags *rootFlags) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&flagXApiVersion, "x-api-version", "2026-04-01", "Required API version header.")
 	cmd.Flags().BoolVar(&flagOverwrite, "overwrite", false, "Overwrite")
 	cmd.Flags().StringVar(&bodyCaption, "caption", "", "Caption")
 	cmd.Flags().StringVar(&bodyFile, "file", "", "File")

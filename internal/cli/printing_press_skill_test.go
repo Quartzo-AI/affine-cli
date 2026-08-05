@@ -32,6 +32,11 @@ func TestPrintingPressSkillMCPEnrichmentGate(t *testing.T) {
 	require.Contains(t, content, "Mandatory >50 endpoint-tools confirmation")
 	require.Contains(t, content, "info: applied Cloudflare MCP pattern")
 	require.Contains(t, content, "does not require a blocking question")
+	require.Contains(t, content, "This is the only count that selects the >50 automatic")
+	require.Contains(t, content, "code orchestration will not shrink them")
+	require.Contains(t, content, "This collapses typed endpoint mirrors, not the runtime command mirror")
+	require.Contains(t, content, "covers the typed-endpoint surface")
+	require.Contains(t, content, "cmd.Annotations[\"mcp:hidden\"]")
 	require.Contains(t, content, "mcp.orchestration: endpoint-mirror")
 	require.Contains(t, content, "x-mcp.orchestration: endpoint-mirror")
 	require.Contains(t, content, "For OpenAPI input specs, declare these fields under `x-mcp:`")
@@ -45,7 +50,7 @@ func TestPrintingPressSkillTranscendenceCollectorSliceInit(t *testing.T) {
 	require.NoError(t, err)
 
 	content := string(data)
-	require.Contains(t, content, "results := make([]yourRowType, 0)")
+	require.Contains(t, content, "results := make([]yourRowType, 0, len(rawRows))")
 	require.Contains(t, content, "empty marshals")
 	require.NotContains(t, content, "var results []yourRowType")
 
@@ -55,6 +60,32 @@ func TestPrintingPressSkillTranscendenceCollectorSliceInit(t *testing.T) {
 	require.Contains(t, content, "successfulItems := make([]yourEntryType, 0)")
 	require.NotContains(t, content, "var failures []fetchFailure")
 	require.NotContains(t, content, "var successfulItems []yourEntryType")
+}
+
+func TestPrintingPressSkillEmptyResultOutputContract(t *testing.T) {
+	t.Parallel()
+
+	data, err := os.ReadFile("../../skills/printing-press/SKILL.md")
+	require.NoError(t, err)
+
+	content := string(data)
+	require.Contains(t, content, "Empty results and output modes")
+	require.Contains(t, content, "wantsHumanTable(cmd.OutOrStdout(), flags)")
+	require.Contains(t, content, "printJSONFiltered(cmd.OutOrStdout(), rows, flags)")
+	require.Contains(t, content, "printJSONFiltered(cmd.OutOrStdout(), make([]yourRowType, 0), flags)")
+	require.Contains(t, content, "make([]yourRowType, 0)")
+	require.NotContains(t, content, "if flags.asJSON || (!isTerminal(cmd.OutOrStdout()) && !humanFriendly)")
+	require.Contains(t, content, "// human-only empty-result prose;")
+	for _, flag := range []string{"`--json`", "`--agent`", "`--csv`"} {
+		require.Contains(t, content, flag)
+	}
+
+	machineIdx := strings.Index(content, "wantsHumanTable(cmd.OutOrStdout(), flags)")
+	humanProseIdx := strings.Index(content, "// human-only empty-result prose;")
+	require.GreaterOrEqual(t, machineIdx, 0)
+	require.GreaterOrEqual(t, humanProseIdx, 0)
+	require.Less(t, machineIdx, humanProseIdx,
+		"machine output must be selected before human-only empty-result prose")
 }
 
 func TestPrintingPressSkillSQLiteNovelCommandsGuardMissingMirror(t *testing.T) {
@@ -67,7 +98,8 @@ func TestPrintingPressSkillSQLiteNovelCommandsGuardMissingMirror(t *testing.T) {
 	require.Contains(t, content, "For SQLite-backed novel commands only")
 	require.Contains(t, content, "live execution without `--dry-run`, before the user has run `sync`")
 	require.Contains(t, content, "os.Stat(dbPath); os.IsNotExist(statErr)")
-	require.Contains(t, content, "flags.asJSON || flags.agent")
+	require.Contains(t, content, "!wantsHumanTable(cmd.OutOrStdout(), flags)")
+	require.Contains(t, content, "printJSONFiltered(cmd.OutOrStdout(), make([]yourRowType, 0), flags)")
 	require.Contains(t, content, "The unconditional `return nil` is intentional")
 	require.Contains(t, content, "store.OpenWithContext")
 
