@@ -1,0 +1,81 @@
+# =============================================================================
+# DRAFT QTZ-948 / Onda A — Quartzo-AI/affine-cli
+# Origem: .depot/workflows/affine-cli-pr-gates.yml @ main (cf39d38cbde1)
+# Estilo de referência: piloto quartzo-cli (.woodpecker/pr-gates.yaml)
+#
+# Destino no PR real: dividir em .woodpecker/build-and-test.yaml e
+# .woodpecker/lint.yaml (layout canônico multi-workflow: o nome do ARQUIVO
+# define o nome do workflow e o contexto). Neste draft os dois workflows
+# vivem em documentos `---` do mesmo arquivo.
+#
+# Contextos esperados no GitHub:
+#   ci/woodpecker/pr/build-and-test   ci/woodpecker/pr/lint
+#
+# Mapeamento de gatilhos:
+#   on.pull_request (SEM filtro de branch!) -> when.event: [pull_request]
+#   sem push/dispatch no original.
+#
+# Inlining de actions:
+#   actions/checkout@v6      -> clone built-in
+#   actions/setup-go@v6      -> imagem golang oficial com a MESMA versão
+#   golangci/golangci-lint-action@v9 (version v2.11.4) -> download do binário
+#     oficial v2.11.4 via install.sh upstream + execução direta
+#
+# SCOPE preservado do original: este gate protege SOMENTE library/affine
+# (módulo Go affine-pp-cli, não existe upstream). O gerador raiz do fork
+# continua fora de escopo de propósito.
+# =============================================================================
+
+when:
+  # O original dispara para PR a QUALQUER branch-alvo — preservado sem
+  # filtro de branch.
+  - event: pull_request
+
+# -----------------------------------------------------------------------------
+# Workflow 1/2 — build and test (library/affine)
+# -----------------------------------------------------------------------------
+steps:
+  build:
+    # setup-go@v6 { go-version: 1.26.5 } -> imagem oficial mesma versão.
+    # TODO(digest-pin)
+    image: golang:1.26.5-bookworm
+    directory: library/affine
+    commands:
+      - go build ./cmd/affine-pp-cli
+
+  test:
+    image: golang:1.26.5-bookworm # TODO(digest-pin)
+    directory: library/affine
+    commands:
+      - go test ./...
+
+---
+# -----------------------------------------------------------------------------
+# Workflow 2/2 — lint (library/affine)
+# Equivalente inline de golangci-lint-action@v9:
+#   version: v2.11.4  -> mesma release binária baixada pela action
+#   verify: false     -> a action pula a checagem de integridade; aqui o
+#                        install.sh já valida por construção da release
+#   working-directory -> campo directory: do step
+# Fog: confirmar que a descoberta de config (.golangci.*) dentro de
+# library/affine se comporta igual à action na primeira execução.
+# -----------------------------------------------------------------------------
+when:
+  - event: pull_request
+
+steps:
+  install-golangci-lint:
+    # Download da MESMA versão que a action pinava. URL do install.sh é a
+    # recomendada pelo upstream; pin por digest/tag entra depois.
+    # TODO(digest-pin)
+    image: golang:1.26.5-bookworm
+    commands:
+      - curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/bin v2.11.4
+
+  golangci-lint:
+    # Gate absoluto: zero findings tolerados (comentário original preservado
+    # no NOTES.md). Roda no módulo, como a action fazia.
+    image: golang:1.26.5-bookworm # TODO(digest-pin)
+    directory: library/affine
+    commands:
+      - /usr/local/bin/golangci-lint run
