@@ -1,0 +1,203 @@
+# =============================================================================
+# Fleet CI — auto-report (opção C)
+# Reporta ESTE repo ao ledger `Fleet CI` da frota Quartzo:
+#   table 67d5d52c-9cd3-4092-9257-aa1f8f63e902 · sheets `Checks` e `Repos`
+#   contrato: 01-projects/quartzo/docs/artifacts/fleet-ci/contrato-colunas.md
+#
+# Roda SÓ em push na branch default. Nunca em pull_request: o secret de org
+# `QUARTZO_API_KEY` não tem o evento pull_request, e um fork não pode forjar
+# uma linha do ledger.
+#
+# A lógica de parse/fingerprint é cópia literal de
+# .skills/run/quartzo/infra/quartzo-ci/scripts/ci_ledger.py (parse_yaml_facts,
+# norm, upsert), para que reporter e reconciliador produzam a MESMA linha.
+#
+# O repo deliberadamente NÃO escreve:
+#   - `Estado: removido`  — só o reconciliador vê a ausência de um arquivo;
+#   - `⚡ Fila: ocioso` em linha existente — desarmar é decisão humana;
+#   - `Último status` / `Último run` — são do último pipeline do repo, e este
+#     pipeline É o último: não existe status final dele mesmo em tempo de run.
+# Escreve `Visto em` em 100% das linhas tocadas, e arma `⚡ Fila=reconciliar`
+# quando o Fingerprint de uma linha existente muda (idêntico ao `sync`).
+#
+# Prova de que rodou não é "verde": é a re-leitura REST no fim do step.
+# =============================================================================
+
+when:
+  - event: push
+    branch: main
+
+steps:
+  - name: fleet-ci-report
+    image: python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0
+    environment:
+      QUARTZO_API_KEY:
+        from_secret: QUARTZO_API_KEY
+    commands:
+      - |
+        python3 - <<'QTZ_REPORT_EOF'
+        import hashlib, json, os, re, sys, urllib.error, urllib.request
+        from datetime import date
+
+        API = os.environ.get("QTZ_TABLES_API", "https://qtz.quartzo.ai")
+        TABLE = "67d5d52c-9cd3-4092-9257-aa1f8f63e902"
+        SHEET_CHECKS = "b2fe61a0-1ce1-48c7-bae5-309c83ac2a5a"
+        SHEET_REPOS = "e8223ec1-d2e1-4e35-ae71-b0026ec7c058"
+        EXCLUDED_OWNERS = {"AliveGroup"}
+        EVENT_OPTIONS = ["push", "pull_request", "tag", "manual", "cron", "deployment"]
+        SLUG = os.environ.get("CI_REPO") or ""
+        ROOT = os.environ.get("CI_WORKSPACE") or os.getcwd()
+        DRY = os.environ.get("QTZ_REPORT_DRY") == "1"
+        KEY = os.environ.get("QUARTZO_API_KEY") or sys.exit("QUARTZO_API_KEY ausente")
+        if not SLUG:
+            sys.exit("CI_REPO ausente")
+        if SLUG.split("/")[0] in EXCLUDED_OWNERS:
+            sys.exit("owner excluido do ledger da frota: " + SLUG)
+
+        IMAGE_RE = re.compile(r"^\s*(?:-\s*)?image:\s*(\S+)", re.M)
+        SECRET_RE = re.compile(r"(?:^\s*(?:-\s*)?secrets?\s*:)|(?:from_secret\s*:)", re.M)
+        EVENT_RE = re.compile(r"^\s*(?:-\s*)?event\s*:\s*(.+)$", re.M)
+        BRANCH_RE = re.compile(r"^\s*(?:-\s*)?branch\s*:\s*(.+)$", re.M)
+
+
+        def scalar_list(raw):
+            raw = raw.strip()
+            if raw.startswith("["):
+                return [p.strip().strip("'\"") for p in raw.strip("[]").split(",") if p.strip()]
+            return [raw.strip("'\"")] if raw and not raw.startswith("#") else []
+
+
+        def parse_yaml_facts(text):
+            docs = [d for d in re.split(r"^---\s*$", text, flags=re.M) if d.strip()]
+            images = IMAGE_RE.findall(text)
+            events = []
+            for chunk in EVENT_RE.findall(text):
+                events += scalar_list(chunk)
+            for m in re.finditer(r"^(\s*)event\s*:\s*$\n((?:\1[ \t]*-\s*\S+\n?)+)", text, re.M):
+                events += [ln.split("-", 1)[1].strip().strip("'\"") for ln in m.group(2).splitlines() if "-" in ln]
+            branches = []
+            for chunk in BRANCH_RE.findall(text):
+                branches += scalar_list(chunk)
+            for m in re.finditer(r"^(\s*)branch\s*:\s*$\n((?:\1[ \t]*-\s*\S+\n?)+)", text, re.M):
+                branches += [ln.split("-", 1)[1].strip().strip("'\"") for ln in m.group(2).splitlines() if "-" in ln]
+            events = [e for e in dict.fromkeys(events) if e in EVENT_OPTIONS]
+            steps = len(re.findall(r"^\s{2,}-?\s*name\s*:", text, re.M)) or len(images)
+            has_secret = bool(SECRET_RE.search(text))
+            return {
+                "fingerprint": hashlib.sha256(text.encode()).hexdigest()[:12],
+                "images_no_digest": sum(1 for i in images if "@sha256:" not in i),
+                "events": events,
+                "branches": ", ".join(dict.fromkeys(branches)),
+                "steps": steps,
+                "secrets": len(re.findall(r"from_secret\s*:", text)) or (1 if has_secret else 0),
+                "secret_in_pr": has_secret and ("pull_request" in events or not events),
+                "multidoc": len(docs) > 1,
+            }
+
+
+        def req(method, sheet, query="", body=None):
+            url = "%s/rest/quartzo/tables/%s/%s/rows%s" % (API, TABLE, sheet, query)
+            data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
+            r = urllib.request.Request(url, data=data, method=method, headers={
+                "Authorization": "Bearer " + KEY, "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(r, timeout=120) as resp:
+                    return json.load(resp)
+            except urllib.error.HTTPError as exc:
+                sys.exit("Tables %s %s %s: %s" % (method, url.split("/rest/")[-1][:90], exc.code,
+                                                  exc.read()[:400].decode("replace")))
+
+
+        def read_rows(sheet):
+            rows, page = [], 1
+            while True:
+                d = req("GET", sheet, "?limit=1000&page=%d" % page)
+                rows += [dict(r["data"]) for r in d["rows"]]
+                if not d["pagination"].get("hasMore"):
+                    return rows
+                page += 1
+
+
+        def norm(v):
+            if v == "" or v is None:
+                return None
+            if isinstance(v, list):
+                return sorted(v)
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, (int, float)):
+                return float(v)
+            return v
+
+
+        def upsert(sheet, key_cols, wanted, label):
+            live = read_rows(sheet)
+            index = {tuple(str(r.get(c) or "") for c in key_cols): r for r in live}
+            for want in wanted:
+                key = tuple(str(want.get(c) or "") for c in key_cols)
+                row = index.get(key)
+                if row is None:
+                    print("  %s %s %s" % ("CREATE" if not DRY else "dry", label, " / ".join(key)))
+                    if not DRY:
+                        body = {k: v for k, v in want.items() if v not in (None, "")}
+                        body.setdefault("⚡ Fila", "ocioso")
+                        req("POST", sheet, body=body)
+                    continue
+                changes = {c: v for c, v in want.items() if norm(row.get(c)) != norm(v)}
+                if not changes:
+                    print("  = %s %s (sem mudanca)" % (label, " / ".join(key)))
+                    continue
+                if "Fingerprint" in changes and row.get("Fingerprint"):
+                    changes["⚡ Fila"] = "reconciliar"
+                print("  %s %s %s :: %s" % ("SET" if not DRY else "dry", label, " / ".join(key),
+                                            ", ".join("%s=%r" % (c, changes[c]) for c in sorted(changes))))
+                if not DRY:
+                    req("PATCH", sheet, body={"lookup": {c: want[c] for c in key_cols}, "data": changes})
+
+
+        def verify(sheet, key_cols, wanted):
+            live = {tuple(str(r.get(c) or "") for c in key_cols): r for r in read_rows(sheet)}
+            bad = []
+            for want in wanted:
+                key = tuple(str(want.get(c) or "") for c in key_cols)
+                row = live.get(key)
+                if row is None:
+                    bad.append("%s: ausente apos a escrita" % "/".join(key))
+                    continue
+                d = sorted(c for c, v in want.items() if norm(row.get(c)) != norm(v))
+                if d:
+                    bad.append("%s: %s" % ("/".join(key), d))
+            return bad
+
+
+        today = date.today().isoformat()
+        wpdir = os.path.join(ROOT, ".woodpecker")
+        files = sorted(f for f in (os.listdir(wpdir) if os.path.isdir(wpdir) else [])
+                       if f.endswith((".yaml", ".yml")) and os.path.isfile(os.path.join(wpdir, f)))
+        checks = []
+        for f in files:
+            with open(os.path.join(wpdir, f), "rb") as fh:
+                text = fh.read().decode("utf-8", errors="replace")
+            fa = parse_yaml_facts(text)
+            checks.append({
+                "Repo": SLUG, "Arquivo": ".woodpecker/" + f, "Check": f.rsplit(".", 1)[0],
+                "Eventos": fa["events"], "Branches": fa["branches"], "Steps": fa["steps"],
+                "Imagens sem digest": fa["images_no_digest"], "Secrets": fa["secrets"],
+                "Secret em PR": fa["secret_in_pr"], "Multi-doc": fa["multidoc"],
+                "Estado": "ativo", "Fingerprint": fa["fingerprint"], "Visto em": today,
+            })
+        repos = [{"Repo": SLUG, "Habilitado no WP": True, "Tem .woodpecker": bool(files),
+                  "Checks": len(files), "Visto em": today}]
+        print("auto-report %s · %s · %d arquivo(s) de pipeline%s" % (SLUG, today, len(files), " · DRY" if DRY else ""))
+        upsert(SHEET_CHECKS, ["Repo", "Arquivo"], checks, "check")
+        upsert(SHEET_REPOS, ["Repo"], repos, "repo")
+        if DRY:
+            print(json.dumps({"checks": checks, "repos": repos}, ensure_ascii=False, indent=1))
+            sys.exit(0)
+        bad = verify(SHEET_CHECKS, ["Repo", "Arquivo"], checks) + verify(SHEET_REPOS, ["Repo"], repos)
+        for b in bad:
+            print("  ! " + b)
+        if bad:
+            sys.exit("a re-leitura nao confirmou a escrita")
+        print("confirmado por re-leitura · https://qtz.quartzo.ai/tables/" + TABLE)
+        QTZ_REPORT_EOF
