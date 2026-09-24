@@ -2,7 +2,7 @@
 
 Shared domain vocabulary for this project — entities, named processes, and status concepts with project-specific meaning. Seeded with core domain vocabulary, then accretes as ce-compound and ce-compound-refresh process learnings; direct edits are fine. Glossary only, not a spec or catch-all.
 
-This file stays **code-free** — it defines what the nouns *mean*. For naming conventions, the disambiguation defaults for overloaded words, and the concrete files, packages, and subcommands behind these concepts, see [`docs/GLOSSARY.md`](docs/GLOSSARY.md).
+This file stays **code-free** — it defines what the nouns *mean*. For naming conventions, the disambiguation defaults for overloaded words, and the concrete files, packages, and subcommands behind these concepts, see [`reference/GLOSSARY.md`](reference/GLOSSARY.md).
 
 ## The system and its product
 

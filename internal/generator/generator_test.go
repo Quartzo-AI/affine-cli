@@ -13451,7 +13451,7 @@ func TestGeneratedSyncMaxPagesAndStickyCursor(t *testing.T) {
 	// AGENTS.md: emission must use the "%s" embedded-quote pattern, not
 	// %q. A %q usage here would be a real bug — JSON shapes for resource
 	// names containing quotes/backslashes would diverge across emission
-	// sites. The plan (docs/plans/2026-04-30-001) calls this out explicitly.
+	// sites.
 	assert.NotContains(t, syncContent,
 		`"reason":%q,"message"`,
 		"sync_warning must use literal %s interpolation, not %q Go-escaping")

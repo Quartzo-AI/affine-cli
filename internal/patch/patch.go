@@ -7,8 +7,7 @@
 // It never reads the source spec, never touches per-endpoint command files,
 // and never changes the CLI's module path.
 //
-// See docs/plans/2026-04-18-001-feat-patch-library-clis-v2-plan.md for the
-// architecture rationale.
+// Package tests cover the architecture constraints.
 package patch
 
 import (

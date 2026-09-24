@@ -111,7 +111,7 @@ Merge capture pieces before analysis:
 cli-printing-press device-sniff ble merge --redact-term PERSONAL_TERM scan.json inspect.json read.json notify.json write.json > evidence.json
 ```
 
-See `docs/BLE-PROBE.md` for macOS and Windows copy/run details.
+See `reference/BLE-PROBE.md` for macOS and Windows copy/run details.
 
 ## Device Sniff Command
 

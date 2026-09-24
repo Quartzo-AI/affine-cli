@@ -18,9 +18,9 @@ Three CLIs printed by the press, installable today:
 
 Browse the full catalog of printed CLIs at [printingpress.dev](https://printingpress.dev) or in the [Printing Press Library](https://github.com/mvanhorn/printing-press-library), organized by category, most with full MCP servers.
 
-**Codex users:** see [docs/CODEX.md](docs/CODEX.md) to install the Printing Press skills with `--agent codex`, verify the install, and understand how that differs from `/printing-press <api> codex`.
+**Codex users:** see [reference/CODEX.md](reference/CODEX.md) to install the Printing Press skills with `--agent codex`, verify the install, and understand how that differs from `/printing-press <api> codex`.
 
-**Cursor users:** see [docs/CURSOR.md](docs/CURSOR.md) for how to install a printed CLI, attach the matching skill, handle auth, and choose CLI vs MCP when your repo does not already document a workflow.
+**Cursor users:** see [reference/CURSOR.md](reference/CURSOR.md) for how to install a printed CLI, attach the matching skill, handle auth, and choose CLI vs MCP when your repo does not already document a workflow.
 
 ## Install
 
@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/mvanhorn/cli-printing-press/main/sc
 npx -y skills@latest list -g -a codex --json
 ```
 
-See [docs/CODEX.md](docs/CODEX.md) for the Codex-specific notes.
+See [reference/CODEX.md](reference/CODEX.md) for the Codex-specific notes.
 
 Verify with `cli-printing-press --version`. If install fails, confirm Go 1.26.5 or newer is installed, Node/npm is installed for `npx`, and `$GOPATH/bin` is on your `PATH`.
 
@@ -107,7 +107,7 @@ claude --plugin-dir .          # load this repo's skills directly
 claude --plugin-dir . -w       # ...in a new git worktree (parallel runs)
 ```
 
-For a persistent local setup that survives restarts and also loads in background sessions, see [Local Plugin Development](docs/PLUGIN-DEV.md).
+For a persistent local setup that survives restarts and also loads in background sessions, see [Local Plugin Development](reference/PLUGIN-DEV.md).
 
 </details>
 
@@ -329,7 +329,7 @@ Published CLIs live in the Printing Press Library. The repo no longer carries a 
 
 Discovery provenance. When the press sniffs a website, it archives everything - pages visited, endpoints discovered, response samples, rate limiting events, and `traffic-analysis.json` with protocol/auth/protection signals and discovery warnings - into a `discovery/` manuscript alongside the research and proofs. Full audit trail.
 
-Full pipeline contract. The fast path above compresses a longer 9-phase managed pipeline: preflight, research, scaffold, enrich, regenerate, review, agent-readiness, comparative, ship. Inputs, outputs, gates, and artifacts for each phase are documented in [docs/PIPELINE.md](docs/PIPELINE.md). Use it when you want to stop at any phase, resume later, re-run one step, or port the flow to another tool.
+Full pipeline contract. The fast path above compresses a longer 9-phase managed pipeline: preflight, research, scaffold, enrich, regenerate, review, agent-readiness, comparative, ship. Inputs, outputs, gates, and artifacts for each phase are documented in [reference/PIPELINE.md](reference/PIPELINE.md). Use it when you want to stop at any phase, resume later, re-run one step, or port the flow to another tool.
 
 <details>
 <summary><b>MCP spec surface (advanced config)</b></summary>
@@ -516,7 +516,7 @@ Each newly published CLI ships a root `AGENTS.md` operating guide, a research ma
 
 ## Troubleshooting
 
-**`/printing-press` slash command doesn't appear.** Restart or reload the agent session after installing the skills. For Claude Code, run `npx -y skills@latest list -g -a claude-code` to verify the install. For Codex, run `npx -y skills@latest list -g -a codex --json`. If you're developing from a clone in Claude Code, confirm `claude --plugin-dir .` was run from the cloned repo root or use the persistent local setup in [Local Plugin Development](docs/PLUGIN-DEV.md).
+**`/printing-press` slash command doesn't appear.** Restart or reload the agent session after installing the skills. For Claude Code, run `npx -y skills@latest list -g -a claude-code` to verify the install. For Codex, run `npx -y skills@latest list -g -a codex --json`. If you're developing from a clone in Claude Code, confirm `claude --plugin-dir .` was run from the cloned repo root or use the persistent local setup in [Local Plugin Development](reference/PLUGIN-DEV.md).
 
 **`cli-printing-press: command not found` after a successful `go install`.** `$GOPATH/bin` (default `~/go/bin`) isn't on your `PATH`. Add it to your shell profile.
 
@@ -577,7 +577,7 @@ lefthook install --reset-hooks-path
 
 Use `--reset-hooks-path` so stale local `core.hooksPath` settings do not block hook sync. Avoid `lefthook install --force` unless intentionally overriding a custom hooks path.
 
-If you use the clone-based developer path above, `claude --plugin-dir .` loads `/printing-press` from your working copy, so local skill edits take effect on the next session start. For a restart-safe local plugin setup, see [Local Plugin Development](docs/PLUGIN-DEV.md). See [AGENTS.md](AGENTS.md) for full conventions, glossary, and release flow.
+If you use the clone-based developer path above, `claude --plugin-dir .` loads `/printing-press` from your working copy, so local skill edits take effect on the next session start. For a restart-safe local plugin setup, see [Local Plugin Development](reference/PLUGIN-DEV.md). See [AGENTS.md](AGENTS.md) for full conventions, glossary, and release flow.
 
 </details>
 

@@ -11,9 +11,7 @@ import (
 
 // TestClassifyPostmanExploreFixture exercises the full classification path
 // against the postman-explore fixture. The fixture reproduces the shapes
-// observed in the real CLI's templated/novel split — see
-// docs/plans/2026-05-01-001-feat-regen-merge-subcommand-plan.md U0 for
-// fixture origins.
+// observed in the real CLI's templated/novel split, including fixture origins.
 func TestClassifyPostmanExploreFixture(t *testing.T) {
 	t.Parallel()
 
@@ -193,7 +191,7 @@ const syncWarningJSON = "{\"warning\":\"safe\"}"
 }
 
 // TestClassifyRejectsTraversal exercises path-validation per
-// docs/solutions/security-issues/filepath-join-traversal-with-user-input-2026-03-29.md.
+// reference/solutions/security-issues/filepath-join-traversal-with-user-input-2026-03-29.md.
 func TestClassifyRejectsTraversal(t *testing.T) {
 	t.Parallel()
 

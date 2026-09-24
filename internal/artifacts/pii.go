@@ -22,7 +22,7 @@ import (
 )
 
 // PII gate implementation following the Deterministic Inventory +
-// Agent-Marked Ledger pattern (docs/PATTERNS.md). Peer to secrets.go.
+// Agent-Marked Ledger pattern (reference/PATTERNS.md). Peer to secrets.go.
 
 const (
 	PIILedgerFilename   = ".printing-press-pii-polish.json"

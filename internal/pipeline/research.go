@@ -370,7 +370,7 @@ type ReadmeSource struct {
 // ParseDiscoveryPages reads a browser-sniff-report.md and extracts the URLs
 // from the "Pages Visited" section. Returns nil if the file doesn't exist or
 // contains no pages. Pre-rename manuscripts using the legacy "sniff-report.md"
-// name are not read — see D3 in docs/plans/2026-04-18-002.
+// name are not read.
 func ParseDiscoveryPages(discoveryDir string) []string {
 	data, err := os.ReadFile(filepath.Join(discoveryDir, "browser-sniff-report.md"))
 	if err != nil {

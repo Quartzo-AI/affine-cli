@@ -195,8 +195,8 @@ not great for daily-driver CLIs.
   package (state file, keychain, chromedp launcher, JWT decode, refresh).
 - [`internal/generator/templates/auth_browser.go.tmpl`](../../../internal/generator/templates/auth_browser.go.tmpl) —
   the template that integrates press-auth into generated CLIs.
-- [`docs/solutions/logic-errors/auth-login-chrome-broken-2026-05.md`](../../../docs/solutions/logic-errors/auth-login-chrome-broken-2026-05.md) —
+- [`reference/solutions/logic-errors/auth-login-chrome-broken-2026-05.md`](../../../reference/solutions/logic-errors/auth-login-chrome-broken-2026-05.md) —
   bug history: the original failure, the root cause, the press-auth fix.
-- [`docs/SPEC-EXTENSIONS.md`](../../../docs/SPEC-EXTENSIONS.md) — canonical
+- [`reference/SPEC-EXTENSIONS.md`](../../../reference/SPEC-EXTENSIONS.md) — canonical
   reference for the spec keys (`login_url`, `login_complete_selector`,
   `jwt_carrier_cookie`, and the OpenAPI `x-auth-companion` form).

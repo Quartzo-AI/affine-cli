@@ -47,8 +47,8 @@ AGENTS.override.md
 # Planning documents stay local — this is a public repo and plans
 # frequently describe in-progress, unreleased, or third-party work.
 # See AGENTS.md "Plan documents stay local" for the rule and rationale.
-/docs/plans/
-/docs/brainstorms/
+/.plans/
+/.brainstorms/
 
 # Quartzo-internal planning artifacts. Archived in qtz-showrunner
 # (00-brain/outputs/2026-08/affine-planning-archive/); this is a public fork.

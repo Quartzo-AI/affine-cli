@@ -100,4 +100,4 @@ This is an interim Python implementation. The eventual home is a
 `cli-printing-press verify-skill` subcommand in the CLI Printing Press,
 alongside `dogfood`, `verify`, and `scorecard` — integrated into
 `shipcheck` so SKILL validity is gated at publish time. See
-`docs/plans/` for the Go-port plan when it lands.
+`.plans/` for the Go-port plan when it lands.
