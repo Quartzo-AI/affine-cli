@@ -879,7 +879,7 @@ When `mcp_token_efficiency`, `mcp_tool_design`, `mcp_remote_transport`, or `mcp_
 | `mcp_tool_design` | `mcp.intents` | Define multi-step intent compositions for the workflows the API supports |
 | `mcp_description_quality` | `mcp-descriptions.json` (override file at the CLI root) | Per-tool description overrides; thin spec-derived descriptions get richer text without spec edits |
 
-Recommended threshold: at >50 typed endpoints, default to recommending all four (`transport`, `endpoint_tools=hidden`, `orchestration=code`, `intents` for the headline workflows). Small APIs (<= `spec.DefaultRemoteTransportEndpointThreshold`) get the http transport by default already, so `mcp_remote_transport` lands at 10/10 without any spec edit — only call it out if the spec explicitly narrowed the list. The full reference is `docs/SPEC-EXTENSIONS.md`.
+Recommended threshold: at >50 typed endpoints, default to recommending all four (`transport`, `endpoint_tools=hidden`, `orchestration=code`, `intents` for the headline workflows). Small APIs (<= `spec.DefaultRemoteTransportEndpointThreshold`) get the http transport by default already, so `mcp_remote_transport` lands at 10/10 without any spec edit — only call it out if the spec explicitly narrowed the list. The full reference is `reference/SPEC-EXTENSIONS.md`.
 
 After editing the spec, regenerate (or `regen-merge` the changes into the published library) so the new `mcp:` block reaches templates. Cobratree-walked novel commands continue to surface as MCP tools either way; they don't need spec changes.
 

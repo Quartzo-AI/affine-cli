@@ -25,7 +25,7 @@ It does not read the source spec, does not touch per-endpoint command
 files, and does not change the CLI's module path — novel and synthetic
 commands are preserved.
 
-See docs/plans/2026-04-18-001-feat-patch-library-clis-v2-plan.md.`,
+See the patch command implementation and tests.`,
 		Example: `  # Dry-run against a library CLI
   cli-printing-press patch ~/Code/printing-press-library/library/productivity/cal-com --dry-run
 

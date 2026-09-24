@@ -11384,7 +11384,7 @@ paths:
 // TestAuthCompanionInternalYAMLRoundTripEqualsOpenAPI asserts that an
 // equivalent OpenAPI spec and internal YAML spec produce the same Auth
 // fields for the companion hints. This is the contract that
-// docs/SPEC-EXTENSIONS.md promises: x-auth-companion at scheme level maps
+// reference/SPEC-EXTENSIONS.md promises: x-auth-companion at scheme level maps
 // 1:1 to the internal `auth:` block fields.
 func TestAuthCompanionInternalYAMLRoundTripEqualsOpenAPI(t *testing.T) {
 	openapiYAML := []byte(`openapi: "3.0.3"

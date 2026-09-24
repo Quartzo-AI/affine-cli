@@ -18,7 +18,7 @@ import (
 // implementation's body. Method-presence alone is not enough — a future
 // refactor that drops the call but keeps the method would silently
 // re-introduce the stale-list-after-mutation bug. See
-// docs/solutions/design-patterns/http-client-cache-invalidate-on-mutation-2026-05-05.md
+// reference/solutions/design-patterns/http-client-cache-invalidate-on-mutation-2026-05-05.md
 // for full rationale.
 //
 // After the verify-mode read-only-POST work, do() is a thin wrapper

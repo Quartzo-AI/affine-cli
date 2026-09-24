@@ -1033,7 +1033,7 @@ Before new research:
 
    **MANDATORY when re-using prior research after a binary upgrade.** If the user picks "Generate a fresh CLI" (option 1) AND `PRESS_VERSION` from the manifest differs from the current binary's version (parse both via semver and compare; only fire when the leading minor or major segment changed — patch-level deltas don't trigger this), prompt the user once before kicking off Phase 1 research.
 
-   Construct the prompt's "what changed" list from these category buckets — the categories are stable across versions; the specific machine deltas inside each category are not. Read `docs/CHANGELOG.md` (or run `git log --oneline v<PRESS_VERSION>..v<CURRENT> -- internal/`) and tag each notable change to one of these buckets:
+   Construct the prompt's "what changed" list from these category buckets — the categories are stable across versions; the specific machine deltas inside each category are not. Read `CHANGELOG.md` (or run `git log --oneline v<PRESS_VERSION>..v<CURRENT> -- internal/`) and tag each notable change to one of these buckets:
 
    | Category | Affects prior-brief assumption about... |
    |---|---|
@@ -2479,7 +2479,7 @@ components:
           description: Raw API key header value.
 ```
 
-See `docs/SPEC-EXTENSIONS.md` for the canonical `x-auth-vars` schema.
+See `reference/SPEC-EXTENSIONS.md` for the canonical `x-auth-vars` schema.
 
 `kind` controls who supplies the value:
 - `per_call` is the default user-supplied credential used by normal commands.
@@ -2827,7 +2827,7 @@ surface only with deliberate per-command `cmd.Annotations["mcp:hidden"] =
 For OpenAPI input specs, declare these fields under `x-mcp:` at the document
 root (OpenAPI 3.0 `x-*` vendor extensions). The shape is identical to the
 internal-YAML `mcp:` block above — same field names, just nested under a
-vendor-extension key. See [`docs/SPEC-EXTENSIONS.md`](../../docs/SPEC-EXTENSIONS.md) for the canonical
+vendor-extension key. See [`reference/SPEC-EXTENSIONS.md`](../../reference/SPEC-EXTENSIONS.md) for the canonical
 schema and `info`-level placement option.
 
 **Smaller-surface variants:**
@@ -2932,11 +2932,11 @@ extension on the editable overlay or derived spec artifact before the final
 `generate` invocation, the same carry-over convention Pre-Generation
 Category Enrichment uses. The shape is identical to the internal-YAML
 `learn:` block, nested under the vendor-extension key; see
-[`docs/SPEC-EXTENSIONS.md`](../../docs/SPEC-EXTENSIONS.md).
+[`reference/SPEC-EXTENSIONS.md`](../../reference/SPEC-EXTENSIONS.md).
 
 For field-by-field sourcing guidance, a worked example, the local validation
 workflow, and common pitfalls, see
-[`docs/SPEC-LEARN-AUTHORING.md`](../../docs/SPEC-LEARN-AUTHORING.md); point
+[`reference/SPEC-LEARN-AUTHORING.md`](../../reference/SPEC-LEARN-AUTHORING.md); point
 there instead of restating it in run artifacts.
 
 ### Lock and Generate
@@ -4897,7 +4897,7 @@ If the shipcheck report contains a `## Known Gaps` block, prepend: "Note: shipch
 
 Invoke `/printing-press-publish <api>`. The publish skill handles everything from there — fork, branch, manifest checks, `cli-skills/pp-<api-slug>/SKILL.md` regen, push, and PR creation.
 
-**Do not improvise the publish flow.** Even though the publish skill itself runs `gh repo fork`, `git push`, and `gh pr create --repo mvanhorn/printing-press-library …` internally, running those commands by hand from this phase skips the preflight checks (printer sentinel validation, manifest shape, vendor-spec PII scope, govulncheck on the changed module) and the public library's own `AGENTS.md` requirements that the skill mirrors. The CWD here is `cli-printing-press`, so the public library's `AGENTS.md` is not loaded — the skill is the only entry point that brings those rules into context. If the publish skill fails, fix the underlying issue (or report it as a machine bug); do not bypass it. See [`AGENTS.md`](AGENTS.md) "Publishing to the Public Library" for the full rule.
+**Do not improvise the publish flow.** Even though the publish skill itself runs `gh repo fork`, `git push`, and `gh pr create --repo mvanhorn/printing-press-library …` internally, running those commands by hand from this phase skips the preflight checks (printer sentinel validation, manifest shape, vendor-spec PII scope, govulncheck on the changed module) and the public library's own `AGENTS.md` requirements that the skill mirrors. The CWD here is `cli-printing-press`, so the public library's `AGENTS.md` is not loaded — the skill is the only entry point that brings those rules into context. If the publish skill fails, fix the underlying issue (or report it as a machine bug); do not bypass it. See [`AGENTS.md`](../../AGENTS.md) "Publishing to the Public Library" for the full rule.
 
 **After publish returns success**, offer retro as a soft tail — **unless a retro proof already exists for this run** (`ls "$PRESS_MANUSCRIPTS/$API_SLUG/$RUN_ID/proofs/"*-retro-*.md` matches, the on-disk artifact `/printing-press-retro` writes when it runs), in which case skip the offer and end normally. Anchor the skip on that file rather than memory — it survives a context-window roll or a mid-session resume, so the decision is the same whether or not the earlier retro is still in context. The publish skill drives its PR to stable green and hands back without offering anything itself; this tail is the only place the ship-path offers retro. It has no business being a peer of publish on the headline menu, but a post-publish optional offer lets users compound learnings without forcing the choice up front. Retro at this point sees the publish step as part of the session it analyzes.
 

@@ -134,7 +134,7 @@ stopwords enter only through this block (or its `x-learn` OpenAPI
 equivalent). Empty seeds parse fine but cap recall at exact-match. For
 field-by-field sourcing guidance, a worked example, and the local validation
 workflow, see
-[`docs/SPEC-LEARN-AUTHORING.md`](../../../docs/SPEC-LEARN-AUTHORING.md).
+[`reference/SPEC-LEARN-AUTHORING.md`](../../../reference/SPEC-LEARN-AUTHORING.md).
 
 For OAuth2 refresh-token rotation without an interactive browser flow, use
 `auth.type: oauth2_refresh` with `auth.token_url`. When `env_vars` is omitted,

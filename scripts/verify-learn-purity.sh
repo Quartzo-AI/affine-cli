@@ -79,7 +79,7 @@ while IFS= read -r tmpl; do
       # so prediction_goat in doc.go.tmpl comments never reaches this branch.
       # Any hit here is in real code and must fail.
       echo "::error file=${rel}::learn template contains prohibited domain identifier '${term}'"
-      echo "  See docs/plans/2026-05-23-002-feat-generator-wide-self-learning-cli-plan.md (Domain words prohibition)."
+      echo "  See AGENTS.md (Generator-reserved namespaces and domain-neutral templates)."
       fail=1
     fi
   done

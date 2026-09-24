@@ -1102,7 +1102,7 @@ type trafficAnalysisTemplateData struct {
 func (g *Generator) readmeData() *readmeTemplateData {
 	// The "sniffed" spec_source is the legacy provenance name for browser-captured
 	// specs (produced by the browser-sniff command). Kept for compatibility; a
-	// migration to "browser-sniffed" is deferred — see docs/plans/2026-04-18-002.
+// migration to "browser-sniffed" is deferred.
 	if g.Spec.WebsiteURL == "" && g.Spec.SpecSource == "sniffed" && g.Spec.BaseURL != "" {
 		if u, err := url.Parse(g.Spec.BaseURL); err == nil && u.Host != "" {
 			g.Spec.WebsiteURL = u.Scheme + "://" + u.Host

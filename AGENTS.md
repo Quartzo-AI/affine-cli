@@ -72,7 +72,7 @@ Always use relative paths for build output. Never build to `/tmp` or another sha
 
 ## Generator Output Stability
 Run `scripts/golden.sh verify` whenever a change may affect CLI command output, browser-sniff or crowd-sniff output, generated specs or generated printed CLI files, templates under `internal/generator/templates/`, naming, endpoint derivation, auth emission, manifest generation, scorecard output, or pipeline artifacts.
-Never update goldens just to make a failing check pass. Run `scripts/golden.sh update` only when the behavior change is intentional, then inspect the diff and explain it in your final response. See [`docs/GOLDEN.md`](docs/GOLDEN.md) for the decision rubric, fixture conventions, and failure handling.
+Never update goldens just to make a failing check pass. Run `scripts/golden.sh update` only when the behavior change is intentional, then inspect the diff and explain it in your final response. See [`reference/GOLDEN.md`](reference/GOLDEN.md) for the decision rubric, fixture conventions, and failure handling.
 When adding a new deterministic CLI behavior or generated artifact contract, explicitly decide whether the golden suite needs a new or expanded fixture. A passing `scripts/golden.sh verify` on existing cases does not prove coverage for new auth, pagination, MCP, manifest, naming, or similar deterministic generation behavior.
 
 ### Generator fixes require generated-output proof
@@ -134,18 +134,18 @@ The same lockstep applies to the learn-loop templates under `internal/generator/
 - `internal/generator/` - Template engine + quality gates
 - `skills/` - Claude Code skill definitions
 - `testdata/` - Test fixtures (internal + OpenAPI specs)
-- `docs/PIPELINE.md` - Portable contract for the 9-phase generation pipeline. Update it when `internal/pipeline/state.go` or `internal/pipeline/seeds.go` changes
-- `docs/SPEC-EXTENSIONS.md` - Canonical reference for Printing Press-specific OpenAPI `x-*` extensions. Update it when `internal/openapi/parser.go` adds or changes an `Extensions["x-*"]` lookup
-- `docs/SKILLS.md` - Skill authoring conventions: workflow parity, reference-file pattern, frontmatter fields
-- `docs/PATTERNS.md` - Cross-cutting design patterns
-- `docs/GOLDEN.md` - Golden harness decision rubric and fixture conventions
+- `reference/PIPELINE.md` - Portable contract for the 9-phase generation pipeline. Update it when `internal/pipeline/state.go` or `internal/pipeline/seeds.go` changes
+- `reference/SPEC-EXTENSIONS.md` - Canonical reference for Printing Press-specific OpenAPI `x-*` extensions. Update it when `internal/openapi/parser.go` adds or changes an `Extensions["x-*"]` lookup
+- `reference/SKILLS.md` - Skill authoring conventions: workflow parity, reference-file pattern, frontmatter fields
+- `reference/PATTERNS.md` - Cross-cutting design patterns
+- `reference/GOLDEN.md` - Golden harness decision rubric and fixture conventions
 - `CONCEPTS.md` (repo root) - Shared domain vocabulary: what the core nouns mean (the Printing Press, printed CLI, spec, brief, manuscript, library, verify, scorecard, etc.), kept code-free. Relevant when orienting to the codebase or discussing domain concepts
-- `docs/GLOSSARY.md` - Naming conventions, overloaded-term disambiguation defaults, and the implementation reference (packages, subcommands, on-disk files) behind the concepts in `CONCEPTS.md`
-- `docs/RELEASE.md` - release-please / goreleaser flow
-- `docs/ATTRIBUTION.md` - Creator + contributors model: resolver fallback, validation layers, legacy-field dual-write window
-- `docs/ARTIFACTS.md` - Local library, manuscripts, and public-library flow
-- `docs/DOCS.md` - Doc-authoring rules, including pointer-rot prevention
-- `docs/solutions/` - Documented solutions to past problems (bugs, design patterns, best practices, conventions), organized by category subdir with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
+- `reference/GLOSSARY.md` - Naming conventions, overloaded-term disambiguation defaults, and the implementation reference (packages, subcommands, on-disk files) behind the concepts in `CONCEPTS.md`
+- `reference/RELEASE.md` - release-please / goreleaser flow
+- `reference/ATTRIBUTION.md` - Creator + contributors model: resolver fallback, validation layers, legacy-field dual-write window
+- `reference/ARTIFACTS.md` - Local library, manuscripts, and public-library flow
+- `reference/DOCS.md` - Doc-authoring rules, including pointer-rot prevention
+- `reference/solutions/` - Focused technical case studies still cited by active code and guides.
 
 ## Naming and Disambiguation
 Use canonical terms so intent stays unambiguous. In skills and user-facing output (GitHub issues, retros, confirmation prompts), call the system **"the Printing Press"**, never "the machine"; subsystem names (generator, scorer, skills, binary) are fine alongside it. When user phrasing is ambiguous and the distinction affects what action to take, ask before acting.
@@ -153,7 +153,7 @@ Use canonical terms so intent stays unambiguous. In skills and user-facing outpu
 - "publish" -> the publish step (pipeline) unless the public-library workflow is called out explicitly
 - "manifest" -> `tools-manifest.json` unless another manifest is named explicitly
 - "the CLI" -> a printed CLI, not the generator binary (say "cli-printing-press binary" for the latter)
-See [`CONCEPTS.md`](CONCEPTS.md) for what the domain nouns mean, and [`docs/GLOSSARY.md`](docs/GLOSSARY.md) for naming conventions, the disambiguation defaults above in full, and the implementation reference behind each concept.
+See [`CONCEPTS.md`](CONCEPTS.md) for what the domain nouns mean, and [`reference/GLOSSARY.md`](reference/GLOSSARY.md) for naming conventions, the disambiguation defaults above in full, and the implementation reference behind each concept.
 
 ## Attribution: creator + contributors
 
@@ -162,7 +162,7 @@ A printed CLI's attribution is a single permanent **`creator`** plus a multi-val
 - **Creator is permanent** — the human who first got the CLI accepted into the library; never reassign it on a reprint or contribution.
 - **Contributors accrue only via `cli-printing-press contributors add`** (run by the contribution flows; idempotent). A plain `generate --force` / `mcp-sync` / sweep preserves the list and never appends the operator.
 - **Manifest is the source of truth** — resolution prefers it over re-derivation so others' regens don't overwrite attribution.
-See [`docs/ATTRIBUTION.md`](docs/ATTRIBUTION.md) for the resolver fallback chain, the copyright-header format, layered validation, the legacy-field dual-write window, and the NOTICE co-creator credit.
+See [`reference/ATTRIBUTION.md`](reference/ATTRIBUTION.md) for the resolver fallback chain, the copyright-header format, layered validation, the legacy-field dual-write window, and the NOTICE co-creator credit.
 
 ## Issue Work Ownership
 Contributor agents without maintainer or admin access must make sure a GitHub issue exists before fixing a bug or behavior change. Maintainers and admins may bypass these issue-ownership rules for maintainer-owned direct work. Do not treat a private plan, external doc, review artifact, or PR body as the only problem statement. Search open and recently closed issues first; reuse an existing issue when one matches instead of filing a duplicate. If no issue exists, open one with enough context for maintainers to understand the bug, scope, and intended fix.
@@ -236,7 +236,7 @@ Releases are automated by release-please. Never manually edit version numbers.
 - The plugin version lives in exactly two places and must stay in sync: `.claude-plugin/plugin.json` -> `version`, and `internal/version/version.go` -> `var Version` (annotated `x-release-please-version`; goreleaser injects via ldflags).
 - `TestVersionConsistencyAcrossFiles` in [`internal/cli/release_test.go`](internal/cli/release_test.go#L57) fails if those two versions drift.
 - Do not add a `version` field to `.claude-plugin/marketplace.json` plugin entries. `TestMarketplaceJSONHasNoPluginVersion` in [`internal/cli/release_test.go`](internal/cli/release_test.go#L81) fails if a reviewer re-adds one.
-See [`docs/RELEASE.md`](docs/RELEASE.md) for the merge-the-release-PR flow.
+See [`reference/RELEASE.md`](reference/RELEASE.md) for the merge-the-release-PR flow.
 
 ## Supported-version floor
 `supported-versions.txt` (repo root) is the **currency floor** — the lowest binary version the generation skills will generate with. The `printing-press` and `printing-press-amend` preflights (and `reprint`, via its hand-off) fetch it from `main` and **hard-block** with `[upgrade-required]` (interactive upgrade-or-abort, no skip) when the installed binary is below it. To push users off a known-buggy release, bump `min_supported` — a one-line PR that takes effect within the 24h version-check cache, no binary or skill release needed.
@@ -261,10 +261,10 @@ PRs touching `.github/workflows/**` are gated by Greptile rules in [`greptile.js
 Runs informationally on landing — promote to a required branch-protection check only after a one-week green window. Canonical incident background lives in the [published-library solutions doc](https://github.com/mvanhorn/printing-press-library/blob/main/docs/solutions/security/2026-05-supply-chain-hardening.md).
 
 ## Local Artifacts
-Generated artifacts live under `~/printing-press/`, not in this repo: `library/<api-slug>/`, `manuscripts/<api-slug>/`, and `.runstate/<scope>/`. The API slug is derived by the generator from the spec title (`cleanSpecName`), and the binary name is `<api-slug>-pp-cli`. Never hardcode an API slug when the generator can derive it. See [`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) for local-vs-public flow and divergence rules.
+Generated artifacts live under `~/printing-press/`, not in this repo: `library/<api-slug>/`, `manuscripts/<api-slug>/`, and `.runstate/<scope>/`. The API slug is derived by the generator from the spec title (`cleanSpecName`), and the binary name is `<api-slug>-pp-cli`. Never hardcode an API slug when the generator can derive it. See [`reference/ARTIFACTS.md`](reference/ARTIFACTS.md) for local-vs-public flow and divergence rules.
 
 ## Plan documents stay local
-When writing a plan document for cli-printing-press work, do not `git add` files under `docs/plans/`. This repo is public; plans frequently describe in-progress, unreleased, or third-party-collaborator work that should not be world-readable. The `/docs/plans/` entry in `.gitignore` enforces this for new files. `TestPlansDirectoryGitignored` in [`internal/cli/release_test.go`](internal/cli/release_test.go) fails if the gitignore line is removed.
+When writing a plan document for cli-printing-press work, do not `git add` files under `.plans/`. This repo is public; plans frequently describe in-progress, unreleased, or third-party-collaborator work that should not be world-readable. The `/.plans/` entry in `.gitignore` enforces this for new files. `TestPlansDirectoryGitignored` in [`internal/cli/release_test.go`](internal/cli/release_test.go) fails if the gitignore line is removed.
 
 ## No private-module requires in printed CLIs
 Printed CLIs are installed via `go install`, so a require on a private module (e.g., `github.com/mvanhorn/agentcookie`) breaks `go mod download` for any user without read access. `TestNoPrivateRequiresInGeneratedGoMod` in [`internal/generator/private_dep_guard_test.go`](internal/generator/private_dep_guard_test.go) regenerates a fixture per auth-type fork and asserts none carry a require on any prefix in `privateModulePrefixes`. When introducing a new internal-by-default module any printed CLI might consume, add its prefix to that list rather than relying on review.
@@ -287,7 +287,7 @@ This copies the skills to `~/.claude/skills/`.
 
 ## Skill Authoring
 When a machine change alters what an agent should do or what a command guarantees, update the relevant `SKILL.md` in the same change; do not leave the skill as a stale manual workaround for behavior the machine now owns.
-Detail in [`docs/SKILLS.md`](docs/SKILLS.md): install targets, workflow parity, the reference-file pattern, and the `context: fork` / `user-invocable` frontmatter fields.
+Detail in [`reference/SKILLS.md`](reference/SKILLS.md): install targets, workflow parity, the reference-file pattern, and the `context: fork` / `user-invocable` frontmatter fields.
 
 ## Code & Comment Hygiene
 ### Write-time defaults
@@ -309,9 +309,9 @@ Detail in [`docs/SKILLS.md`](docs/SKILLS.md): install targets, workflow parity, 
 ## Editing AGENTS.md
 The "Code & Comment Hygiene" rules apply here too. Keep inline `AGENTS.md` rules command-shaped: trigger, required action or prohibition, concrete values, then a pointer to any longer doc.
 
-**Pointer-rot rule.** When editing a doc under `docs/` that `AGENTS.md` points to, update the inline trigger sentence here in the same PR if applicability changes — a new fire condition, a removed fire condition, or a changed prohibition, enum, file path, test name, or required value. The inline rule is what the agent sees on every turn; the extracted doc is only loaded if the agent follows the pointer.
+**Pointer-rot rule.** When editing a guide under `reference/` that `AGENTS.md` points to, update the inline trigger sentence here in the same PR if applicability changes — a new fire condition, a removed fire condition, or a changed prohibition, enum, file path, test name, or required value. The inline rule is what the agent sees on every turn; the extracted guide is only loaded if the agent follows the pointer.
 
-See [`docs/DOCS.md`](docs/DOCS.md) for the full doc-authoring rules.
+See [`reference/DOCS.md`](reference/DOCS.md) for the full doc-authoring rules.
 
 ## Patterns
-Cross-cutting design patterns are documented in [`docs/PATTERNS.md`](docs/PATTERNS.md). Notably **Deterministic Inventory + Agent-Marked Ledger** — the shape used by `cli-printing-press tools-audit` and `cli-printing-press public-param-audit` for workflows that combine mechanical detection with per-item agent judgment.
+Cross-cutting design patterns are documented in [`reference/PATTERNS.md`](reference/PATTERNS.md). Notably **Deterministic Inventory + Agent-Marked Ledger** — the shape used by `cli-printing-press tools-audit` and `cli-printing-press public-param-audit` for workflows that combine mechanical detection with per-item agent judgment.

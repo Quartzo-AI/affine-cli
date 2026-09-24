@@ -2383,7 +2383,7 @@ type Endpoint struct {
 	// or query parameter, or when the placeholder name does not match the
 	// parent resource. Internal YAML emits it as `walker:` on the endpoint;
 	// OpenAPI emits it as `x-pp-sync-walker` on the operation. See
-	// docs/SPEC-EXTENSIONS.md for the canonical schema.
+	// reference/SPEC-EXTENSIONS.md for the canonical schema.
 	Walker *WalkerConfig `yaml:"walker,omitempty" json:"walker,omitempty"`
 	Alias  string        `yaml:"-" json:"-"` // computed, not from YAML
 	// BodySet reports whether the source spec declared a `body:` key on this

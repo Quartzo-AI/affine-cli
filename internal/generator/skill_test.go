@@ -659,7 +659,7 @@ func TestSkillFrontmatterEmitsHermesTopLevelFields(t *testing.T) {
 	// CI-time stamping from goreleaser tags is a possible future addition
 	// in printing-press-library; for now, no version field is honest.
 	assert.NotContains(t, body, "version:",
-		"version field should be omitted — see learning docs in docs/solutions/")
+		"version field should be omitted")
 }
 
 // TestSkillFrontmatterOmitsAllEnvVarDeclarations asserts the post-Hermes-

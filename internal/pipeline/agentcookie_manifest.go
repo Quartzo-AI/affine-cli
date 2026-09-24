@@ -61,7 +61,7 @@ func WriteAgentcookieManifest(p GenerateManifestParams) error {
 func renderAgentcookieManifest(cliName, displayName, description string, syncKeys map[string]bool) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "# agentcookie.toml: secrets-bus adoption manifest v2")
-	fmt.Fprintln(&b, "# See docs/spec-agentcookie-secrets-bus-v2-adoption.md")
+	fmt.Fprintln(&b, "# Agentcookie secrets bus adoption")
 	fmt.Fprintln(&b, "schema_version = 2")
 	fmt.Fprintf(&b, "name = %s\n", tomlString(cliName))
 	fmt.Fprintf(&b, "display_name = %s\n", tomlString(displayName))

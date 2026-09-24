@@ -39,7 +39,7 @@ func validateInputPath(input string, force bool) error {
 
 // validatePathAgainstCWD rejects an absolute path that isn't under the
 // current working directory's prefix. Mitigates filepath.Join traversal per
-// docs/solutions/security-issues/filepath-join-traversal-with-user-input-2026-03-29.md.
+// reference/solutions/security-issues/filepath-join-traversal-with-user-input-2026-03-29.md.
 func validatePathAgainstCWD(absPath string, force bool) error {
 	if force {
 		return nil

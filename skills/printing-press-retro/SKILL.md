@@ -674,7 +674,7 @@ section is empty, re-check Phase 2.5 — almost every retro has some.*
 
 Save the retro to manuscript proofs (always) and to the temp retro scratch
 directory (always). Do not save retro documents under the source repo's
-`docs/retros/` directory; the skill must work the same way for users who do not
+`retros/` directory; the skill must work the same way for users who do not
 have the repo checked out, and retro documents are issue artifacts rather than
 durable repo docs.
 

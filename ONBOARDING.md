@@ -37,7 +37,7 @@ cli-printing-press/
   skills/                    # Claude Code skill defs
     printing-press/          # Main generation skill
   testdata/                  # Test fixtures
-  docs/plans/                # Project planning docs for this repo itself
+  .plans/                # Project planning docs for this repo itself
 ```
 
 | Module | Responsibility |
