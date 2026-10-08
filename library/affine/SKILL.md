@@ -465,3 +465,23 @@ Parse `$ARGUMENTS`:
    affine-pp-cli <command> [subcommand] [args] --agent
    ```
 4. If ambiguous, drill into subcommand help: `affine-pp-cli <command> --help`.
+
+
+## Native canvas editing
+
+`canvas card edit --spec <manifest.json> --dry-run --json` validates granular
+`edit_card`, `upsert_frame`, and `remove_connector` operations. Apply the reviewed
+manifest with `--workspace <id> --doc <id> --backup-dir <path> --apply --yes`.
+Each card edit requires `expected_children`; supply `expected_texts` from native
+`canvas block` reads to reject concurrent text changes. `paragraphs` preserve
+specified IDs and parse inline Markdown into native rich text. `remove_text_ids`
+can remove reviewed text leaves or text subtrees whose descendants all have
+matching `expected_texts`; media deletion is rejected. Unmentioned media stays.
+An optional `image: {source_id, width, height}` updates the first image or adds one.
+Frames require title, xywh, and children. Connector removal rejects other elements.
+Every apply uses the existing backup, integrity, delta, and reload proof pipeline.
+
+`canvas card upload-image --file <raster> --workspace <id> --dry-run --json`
+previews an image up to 10 MiB. `--apply --yes` uploads it through the real
+GraphQL `setBlob` endpoint and returns the `source_id` used by native image blocks.
+Keep tokens injected through the credential provider; never copy them into files.
