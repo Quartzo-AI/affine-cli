@@ -9,7 +9,7 @@
 # uma linha do ledger.
 #
 # A lógica de parse/fingerprint é cópia literal de
-# .skills/run/quartzo/infra/quartzo-ci/scripts/ci_ledger.py (parse_yaml_facts,
+# .skills/quartzo/infra/quartzo-ci/scripts/ci_ledger.py (parse_yaml_facts,
 # norm, upsert), para que reporter e reconciliador produzam a MESMA linha.
 #
 # O repo deliberadamente NÃO escreve:
