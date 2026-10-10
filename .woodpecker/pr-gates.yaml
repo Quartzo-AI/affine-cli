@@ -30,6 +30,7 @@ when:
   # O original dispara para PR a QUALQUER branch-alvo — preservado sem
   # filtro de branch.
   - event: pull_request
+    evaluate: 'CI_COMMIT_PULL_REQUEST_DRAFT != "true" && !((CI_COMMIT_SOURCE_BRANCH ?? "") startsWith "rescue/") && !((CI_COMMIT_BRANCH ?? "") startsWith "rescue/")'
 
 # -----------------------------------------------------------------------------
 # Workflow 1/2 — build and test (library/affine)
