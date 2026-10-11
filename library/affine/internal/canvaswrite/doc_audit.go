@@ -242,10 +242,7 @@ func auditBlocks(cfg *config.Config, engine *yjs.Engine, opts DocAuditOptions) (
 		return engine.ReadBlocks(doc)
 	}
 
-	bearer := cfg.AffineToken
-	if bearer == "" {
-		bearer = strings.TrimPrefix(cfg.AuthHeader(), "Bearer ")
-	}
+	bearer := strings.TrimPrefix(cfg.AuthHeader(), "Bearer ")
 	client, err := socketio.Connect(socketio.WSURLFromGraphQL(strings.TrimRight(cfg.BaseURL, "/")+"/graphql"), "", bearer)
 	if err != nil {
 		return nil, err

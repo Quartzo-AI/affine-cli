@@ -4,12 +4,14 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"affine-pp-cli/internal/authsession"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -27,6 +29,14 @@ type Config struct {
 	envOverrides  map[string]bool   `toml:"-"`
 	fileConfig    *Config           `toml:"-"`
 	AffineToken   string            `toml:"token"`
+
+	// Session login (AFFiNE >= 0.27 only accepts a JWT minted by the session
+	// endpoints). Credentials come from the environment only, never the file.
+	SessionEmail    string `toml:"-"`
+	SessionPassword string `toml:"-"`
+	sessionResolved bool
+	sessionBearer   string
+	sessionErr      error
 }
 
 func Load(configPath string) (*Config, error) {
@@ -92,6 +102,9 @@ func Load(configPath string) (*Config, error) {
 		}
 	}
 
+	cfg.SessionEmail = firstEnv("AFFINE_EMAIL", "AFFINE_USERNAME")
+	cfg.SessionPassword = os.Getenv("AFFINE_PASSWORD")
+
 	// Base URL override (used by printing-press verify to point at mock/test servers)
 	if v := os.Getenv("AFFINE_BASE_URL"); v != "" {
 		cfg.BaseURL = v
@@ -103,7 +116,20 @@ func (c *Config) AuthHeader() string {
 	if c.AuthHeaderVal != "" {
 		return c.AuthHeaderVal
 	}
+	// A JWT in AFFINE_TOKEN is what the server accepts as-is.
+	if c.AffineToken != "" && authsession.IsJWT(c.AffineToken) {
+		if c.AuthSource == "" {
+			c.AuthSource = "env:AFFINE_TOKEN"
+		}
+		return "Bearer " + c.AffineToken
+	}
+	if bearer := c.sessionBearerToken(); bearer != "" {
+		c.AuthSource = "session"
+		return "Bearer " + bearer
+	}
 	// Env-var token wins over file-stored AccessToken (env > config convention).
+	// A non-JWT token (the retired "ut_..." PAT) is kept so that doctor can prove
+	// the server rejects it, instead of silently reporting "not configured".
 	if c.AffineToken != "" {
 		if c.AuthSource == "" {
 			c.AuthSource = "env:AFFINE_TOKEN"
@@ -115,6 +141,52 @@ func (c *Config) AuthHeader() string {
 			c.AuthSource = "oauth2"
 		}
 		return "Bearer " + c.AccessToken
+	}
+	return ""
+}
+
+// SessionCachePath is the 0600 file holding the rotating refresh token.
+func (c *Config) SessionCachePath() string {
+	if c.Path == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(c.Path), "session.json")
+}
+
+// SessionError is why the session login failed, if it was attempted.
+func (c *Config) SessionError() error { return c.sessionErr }
+
+// SessionConfigured reports whether a session login can be attempted.
+func (c *Config) SessionConfigured() bool {
+	return c.SessionEmail != "" && c.SessionPassword != "" ||
+		authsession.HasCachedSession(c.SessionCachePath(), c.BaseURL)
+}
+
+// sessionBearerToken resolves the session JWT once per process.
+func (c *Config) sessionBearerToken() string {
+	if c.sessionResolved {
+		return c.sessionBearer
+	}
+	c.sessionResolved = true
+	if os.Getenv("PRINTING_PRESS_VERIFY") != "" || !c.SessionConfigured() {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	c.sessionBearer, c.sessionErr = authsession.AccessToken(ctx, authsession.Options{
+		BaseURL:   c.BaseURL,
+		Email:     c.SessionEmail,
+		Password:  c.SessionPassword,
+		CachePath: c.SessionCachePath(),
+	})
+	return c.sessionBearer
+}
+
+func firstEnv(names ...string) string {
+	for _, n := range names {
+		if v := os.Getenv(n); v != "" {
+			return v
+		}
 	}
 	return ""
 }
@@ -178,6 +250,7 @@ func (c *Config) ClearTokens() error {
 	c.updateFileConfigField("ClientSecret")
 	c.AffineToken = ""
 	delete(c.envOverrides, "AffineToken")
+	_ = authsession.Clear(c.SessionCachePath())
 	return c.save()
 }
 

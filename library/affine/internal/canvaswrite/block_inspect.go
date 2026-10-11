@@ -29,10 +29,7 @@ func InspectBlock(cfg *config.Config, opts BlockInspectOptions) (BlockInspectRes
 		return BlockInspectResult{}, fmt.Errorf("--doc and --block are required")
 	}
 
-	bearer := cfg.AffineToken
-	if bearer == "" {
-		bearer = strings.TrimPrefix(cfg.AuthHeader(), "Bearer ")
-	}
+	bearer := strings.TrimPrefix(cfg.AuthHeader(), "Bearer ")
 	client, err := socketio.Connect(socketio.WSURLFromGraphQL(strings.TrimRight(cfg.BaseURL, "/")+"/graphql"), "", bearer)
 	if err != nil {
 		return BlockInspectResult{}, err

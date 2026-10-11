@@ -1,6 +1,7 @@
 package socketio
 
 import (
+	"affine-pp-cli/internal/authsession"
 	"fmt"
 	"net/http"
 	"strings"
@@ -56,6 +57,10 @@ func Connect(baseURL, cookie, bearer string) (*Client, error) {
 	if len(headers) > 0 {
 		opts.SetExtraHeaders(headers)
 	}
+	if bearer != "" {
+		// The gateway copies handshake.auth.token into Authorization when tokenType is jwt.
+		opts.SetAuth(map[string]any{"tokenType": "jwt", "token": bearer})
+	}
 
 	// Set up connect event handlers before connecting
 	connected := make(chan struct{}, 1)
@@ -107,7 +112,7 @@ func Connect(baseURL, cookie, bearer string) (*Client, error) {
 		return &Client{socket: socket}, nil
 	case err := <-connectErr:
 		socket.Disconnect()
-		return nil, err
+		return nil, connectFailure(err, bearer)
 	case <-time.After(defaultConnectTimeout):
 		// The socket may still be usable even if we missed the connect event
 		if socket.Connected() {
@@ -116,6 +121,16 @@ func Connect(baseURL, cookie, bearer string) (*Client, error) {
 		socket.Disconnect()
 		return nil, fmt.Errorf("socket.io connect timeout after %v", defaultConnectTimeout)
 	}
+}
+
+// connectFailure explains a refused handshake. AFFiNE >= 0.27 refuses sockets
+// whose Bearer is not a JWT session (the Go client then reports the unreadable
+// error packet as "missing 'data' field"), so name the likely cause.
+func connectFailure(err error, bearer string) error {
+	if bearer == "" || !authsession.IsJWT(bearer) {
+		return fmt.Errorf("socket.io handshake refused (%v): no JWT session; set AFFINE_EMAIL and AFFINE_PASSWORD (a ut_ token no longer authenticates on AFFiNE >= 0.27)", err)
+	}
+	return fmt.Errorf("socket.io handshake refused (%v): the JWT session was not accepted; run `affine doctor`", err)
 }
 
 // Close disconnects the socket.
@@ -140,6 +155,10 @@ func (c *Client) JoinWorkspace(workspaceID, clientVersion string) error {
 	return nil
 }
 
+// ErrNoDocData means load-doc was acked without a document: the socket is not
+// authenticated, or the account cannot read the doc.
+var ErrNoDocData = fmt.Errorf("load-doc returned no data: the session is not authenticated or lacks permission on this doc (run `affine doctor`; AFFiNE >= 0.27 needs a JWT session via AFFINE_EMAIL/AFFINE_PASSWORD, not a ut_ token)")
+
 // LoadDocResult contains the result of loading a document.
 type LoadDocResult struct {
 	Missing   string // base64-encoded Y.js state (named "missing" in the AFFiNE protocol)
@@ -162,11 +181,16 @@ func (c *Client) LoadDoc(workspaceID, docID string) (*LoadDocResult, error) {
 	}
 	data, _ := ack["data"].(map[string]any)
 	if data == nil {
-		return &LoadDocResult{}, nil
+		// An anonymous or unauthorized socket gets an ack without data; surface
+		// that instead of letting the Y.js decoder fail with "missing 'data' field".
+		return nil, ErrNoDocData
 	}
 	result := &LoadDocResult{}
 	if s, ok := data["missing"].(string); ok {
 		result.Missing = s
+	}
+	if result.Missing == "" {
+		return nil, ErrNoDocData
 	}
 	if ts, ok := data["timestamp"].(float64); ok {
 		result.Timestamp = int64(ts)

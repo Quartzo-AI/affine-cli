@@ -692,10 +692,7 @@ func validateCanvasLayoutApply(plan canvasPlan, workspaceID, docID, backupDir st
 }
 
 func applyCanvasLayoutPlan(cfg *config.Config, plan canvasPlan, workspaceID, docID, backupDir string) (canvasLayoutApplyResult, error) {
-	bearer := cfg.AffineToken
-	if bearer == "" {
-		bearer = strings.TrimPrefix(cfg.AuthHeader(), "Bearer ")
-	}
+	bearer := strings.TrimPrefix(cfg.AuthHeader(), "Bearer ")
 	client, err := socketio.Connect(socketio.WSURLFromGraphQL(strings.TrimRight(cfg.BaseURL, "/")+"/graphql"), "", bearer)
 	if err != nil {
 		return canvasLayoutApplyResult{}, err

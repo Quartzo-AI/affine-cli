@@ -37,10 +37,7 @@ func InspectCard(cfg *config.Config, opts CardInspectOptions) (CardInspectResult
 		return CardInspectResult{}, fmt.Errorf("--doc and --card are required")
 	}
 
-	bearer := cfg.AffineToken
-	if bearer == "" {
-		bearer = strings.TrimPrefix(cfg.AuthHeader(), "Bearer ")
-	}
+	bearer := strings.TrimPrefix(cfg.AuthHeader(), "Bearer ")
 	client, err := socketio.Connect(socketio.WSURLFromGraphQL(strings.TrimRight(cfg.BaseURL, "/")+"/graphql"), "", bearer)
 	if err != nil {
 		return CardInspectResult{}, err

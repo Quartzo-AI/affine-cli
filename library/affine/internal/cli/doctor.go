@@ -184,7 +184,9 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 
 					// Step 2: Validate credentials with an authenticated probe.
 					authHeader := cfg.AuthHeader()
-					if authHeader == "" {
+					if serr := cfg.SessionError(); serr != nil {
+						report["credentials"] = "invalid — session login failed: " + serr.Error()
+					} else if authHeader == "" {
 						// No auth configured — skip credential validation
 					} else if reachErr != nil && !errors.As(reachErr, &reachAPIErr) {
 						report["credentials"] = "skipped (API unreachable)"
@@ -205,18 +207,11 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 						// probe under PRINTING_PRESS_VERIFY=1.
 						authHeaders["Content-Type"] = "application/json"
 						verifyBody := map[string]string{"query": "{ currentUser { id email name } }"}
-						respBody, _, gqlErr := c.PostQueryWithParamsAndHeaders(cmd.Context(), "", authParams, verifyBody, authHeaders)
+						respBody, _, gqlErr := c.PostQueryWithParamsAndHeaders(cmd.Context(), "/graphql", authParams, verifyBody, authHeaders)
 						var gqlAPIErr *client.APIError
 						switch {
 						case gqlErr == nil:
-							var envelope struct {
-								Errors []json.RawMessage `json:"errors"`
-							}
-							if jerr := json.Unmarshal(respBody, &envelope); jerr == nil && len(envelope.Errors) > 0 {
-								report["credentials"] = "rejected — GraphQL response contained top-level errors"
-							} else {
-								report["credentials"] = "valid"
-							}
+							report["credentials"] = classifyCurrentUserProbe(respBody)
 						case errors.As(gqlErr, &gqlAPIErr):
 							switch {
 							case gqlAPIErr.StatusCode == 401:
@@ -224,7 +219,8 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 							case gqlAPIErr.StatusCode == 403:
 								report["credentials"] = fmt.Sprintf("scope-limited (HTTP %d) — credentials are valid but lack permission for this endpoint. Check your dashboard's API key scope.", gqlAPIErr.StatusCode)
 							default:
-								report["credentials"] = fmt.Sprintf("ok (HTTP %d from GraphQL probe, but auth was accepted)", gqlAPIErr.StatusCode)
+								// A non-2xx answer proves nothing about the credential.
+								report["credentials"] = fmt.Sprintf("error: GraphQL probe failed (HTTP %d); credential not verified", gqlAPIErr.StatusCode)
 							}
 						default:
 							report["credentials"] = fmt.Sprintf("error: %s", gqlErr)
@@ -254,6 +250,9 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 
 			if flags.asJSON {
 				if err := printJSONFiltered(cmd.OutOrStdout(), report, flags); err != nil {
+					return err
+				}
+				if err := doctorCredentialsErr(report); err != nil {
 					return err
 				}
 				return doctorExitForFailOn(failOn, report)
@@ -314,6 +313,9 @@ func newDoctorCmd(flags *rootFlags) *cobra.Command {
 			if docsURL, ok := report["auth_docs_url"]; ok {
 				fmt.Fprintf(w, "  See API docs: %v\n", docsURL)
 			}
+			if err := doctorCredentialsErr(report); err != nil {
+				return err
+			}
 			return doctorExitForFailOn(failOn, report)
 		},
 	}
@@ -357,6 +359,40 @@ func doctorExitForFailOn(failOn string, report map[string]any) error {
 		}
 	default:
 		return fmt.Errorf("doctor: unknown --fail-on value %q (valid: stale, error)", failOn)
+	}
+	return nil
+}
+
+// classifyCurrentUserProbe judges the credential by what the server says about
+// the caller. AFFiNE answers an unauthenticated GraphQL request with HTTP 200
+// and `currentUser: null`, so reachability or HTTP status never proves auth.
+func classifyCurrentUserProbe(body []byte) string {
+	var envelope struct {
+		Data struct {
+			CurrentUser *struct {
+				ID    string `json:"id"`
+				Email string `json:"email"`
+			} `json:"currentUser"`
+		} `json:"data"`
+		Errors []json.RawMessage `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return "error: unreadable GraphQL probe response; credential not verified"
+	}
+	if envelope.Data.CurrentUser != nil && envelope.Data.CurrentUser.ID != "" {
+		return "valid (currentUser " + envelope.Data.CurrentUser.Email + ")"
+	}
+	if len(envelope.Errors) > 0 {
+		return "invalid — GraphQL probe returned errors and no currentUser; the server treated the request as anonymous"
+	}
+	return "invalid — currentUser is null: the server treated the request as anonymous. AFFiNE >= 0.27 only accepts a JWT session; set AFFINE_EMAIL and AFFINE_PASSWORD (a ut_ token no longer works)"
+}
+
+// doctorCredentialsErr makes doctor exit non-zero when the probe proved the
+// credential is not accepted, regardless of --fail-on.
+func doctorCredentialsErr(report map[string]any) error {
+	if s, _ := report["credentials"].(string); strings.HasPrefix(s, "invalid") {
+		return authErr(fmt.Errorf("doctor: credentials %s", s))
 	}
 	return nil
 }

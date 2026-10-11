@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "id": "affine-session-auth-0-27",
+  "applied_at": "2026-10-11",
+  "base_run_id": "20260617-174848",
+  "base_printing_press_version": "4.24.0",
+  "summary": "Authenticates against AFFiNE >= 0.27 with a JWT session (sign-in, exchange, refresh) instead of a personal access token, and fails loudly when the server treats the CLI as anonymous.",
+  "reason": "The server only honours a Bearer that is a JWT (core/auth/guard.ts isLikelyJwt) and silently downgrades any other Bearer, including the retired ut_ tokens, to an anonymous request. doctor passed on HTTP 404 and canvas reads died with \"missing 'data' field\". Decision: cache the rotating refresh token in session.json (0600, next to config.toml) and refresh it, with a lock across processes, rather than signing in on every run; this opens one device session and still re-logs in with AFFINE_EMAIL/AFFINE_PASSWORD when the refresh token is gone. Credentials come from the environment only. Not applied to the server: Copilot/MCP credentials stay a founder decision.",
+  "files": [
+    "internal/authsession/authsession.go",
+    "internal/authsession/authsession_test.go",
+    "internal/config/config.go",
+    "internal/config/session_test.go",
+    "internal/socketio/client.go",
+    "internal/cli/auth.go",
+    "internal/cli/doctor.go",
+    "internal/cli/doctor_auth_test.go",
+    "internal/cli/canvas.go",
+    "internal/canvaswrite/connect.go",
+    "internal/canvaswrite/card_inspect.go",
+    "internal/canvaswrite/card_image.go",
+    "internal/canvaswrite/block_inspect.go",
+    "internal/canvaswrite/doc_audit.go"
+  ],
+  "validated_outcome": "go test of authsession, config, cli, socketio, canvaswrite and client against an httptest fake of the session endpoints; doctor classifies currentUser null as invalid and exits non-zero. Live validation depends on the agent credential in OpenBao /agents/showrunner/affine."
+}

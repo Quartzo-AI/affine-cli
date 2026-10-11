@@ -21,6 +21,7 @@ func newAuthCmd(flags *rootFlags) *cobra.Command {
 	}
 
 	cmd.AddCommand(newAuthSetupCmd(flags))
+	cmd.AddCommand(newAuthLoginCmd(flags))
 	cmd.AddCommand(newAuthStatusCmd(flags))
 	cmd.AddCommand(newAuthSetTokenCmd(flags))
 	cmd.AddCommand(newAuthLogoutCmd(flags))
@@ -39,11 +40,11 @@ func newAuthSetupCmd(_ *rootFlags) *cobra.Command {
 		Example: "  affine-pp-cli auth setup\n  affine-pp-cli auth setup --launch",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			w := cmd.OutOrStdout()
-			fmt.Fprintln(w, "See API docs: https://affine.quartzo.ai")
-			fmt.Fprintln(w, "")
-			fmt.Fprintln(w, "Then set:")
-			fmt.Fprintln(w, "  export AFFINE_TOKEN=\"your-token-here\"")
-			fmt.Fprintln(w, "  affine-pp-cli auth set-token <token>")
+			fmt.Fprintln(w, "AFFiNE >= 0.27 authenticates with a JWT session, not a personal access token.")
+			fmt.Fprintln(w, "Provide the account through the environment (never a file or chat):")
+			fmt.Fprintln(w, "  AFFINE_EMAIL     account e-mail")
+			fmt.Fprintln(w, "  AFFINE_PASSWORD  account password")
+			fmt.Fprintln(w, "Then run `affine-pp-cli auth login`; the refresh token is cached in session.json (0600).")
 			if !launch {
 				return nil
 			}
@@ -77,6 +78,32 @@ func openSetupURL(url string) error {
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
 	return c.Start()
+}
+
+func newAuthLoginCmd(flags *rootFlags) *cobra.Command {
+	return &cobra.Command{
+		Use:     "login",
+		Short:   "Sign in with AFFINE_EMAIL/AFFINE_PASSWORD and cache the JWT session",
+		Example: "  AFFINE_EMAIL=agent@example.com AFFINE_PASSWORD=... affine-pp-cli auth login",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(flags.configPath)
+			if err != nil {
+				return configErr(err)
+			}
+			if !cfg.SessionConfigured() {
+				return authErr(fmt.Errorf("set AFFINE_EMAIL and AFFINE_PASSWORD to sign in"))
+			}
+			if cfg.AuthHeader() == "" || cfg.SessionError() != nil {
+				return authErr(fmt.Errorf("sign-in failed: %v", cfg.SessionError()))
+			}
+			out := map[string]any{"authenticated": true, "source": "session", "email": cfg.SessionEmail, "session_cache": cfg.SessionCachePath()}
+			if flags.asJSON {
+				return printJSONFiltered(cmd.OutOrStdout(), out, flags)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), green("Signed in; JWT session cached"))
+			return nil
+		},
+	}
 }
 
 func newAuthStatusCmd(flags *rootFlags) *cobra.Command {
