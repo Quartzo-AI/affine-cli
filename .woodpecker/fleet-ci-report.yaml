@@ -105,7 +105,7 @@ steps:
                     return json.load(resp)
             except urllib.error.HTTPError as exc:
                 sys.exit("Tables %s %s %s: %s" % (method, url.split("/rest/")[-1][:90], exc.code,
-                                                  exc.read()[:400].decode("replace")))
+                                                  exc.read()[:400].decode("utf-8", "replace")))
 
 
         def read_rows(sheet):
