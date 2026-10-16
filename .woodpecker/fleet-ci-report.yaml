@@ -43,7 +43,7 @@ steps:
         TABLE = "67d5d52c-9cd3-4092-9257-aa1f8f63e902"
         SHEET_CHECKS = "b2fe61a0-1ce1-48c7-bae5-309c83ac2a5a"
         SHEET_REPOS = "e8223ec1-d2e1-4e35-ae71-b0026ec7c058"
-        EXCLUDED_OWNERS = {"AliveGroup"}
+        EXCLUDED_OWNERS = set()
         EVENT_OPTIONS = ["push", "pull_request", "tag", "manual", "cron", "deployment"]
         SLUG = os.environ.get("CI_REPO") or ""
         ROOT = os.environ.get("CI_WORKSPACE") or os.getcwd()
