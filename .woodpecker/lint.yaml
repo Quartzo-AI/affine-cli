@@ -18,12 +18,14 @@ when:
 
 steps:
   install-golangci-lint:
+    # Cada step é um container novo: só o workspace persiste, então o binário
+    # vai para $CI_WORKSPACE/.bin (em /usr/local/bin sumia, exit 127, #22).
     # Download da MESMA versão que a action pinava. URL do install.sh é a
     # recomendada pelo upstream; pin por digest/tag entra depois.
     # TODO(digest-pin)
     image: golang:1.26.5-bookworm
     commands:
-      - curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/bin v2.11.4
+      - curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$${CI_WORKSPACE}/.bin" v2.11.4
 
   golangci-lint:
     # Gate absoluto: zero findings tolerados (comentário original preservado
@@ -31,4 +33,4 @@ steps:
     image: golang:1.26.5-bookworm # TODO(digest-pin)
     directory: library/affine
     commands:
-      - /usr/local/bin/golangci-lint run
+      - $${CI_WORKSPACE}/.bin/golangci-lint run
