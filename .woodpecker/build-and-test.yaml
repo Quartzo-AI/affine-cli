@@ -1,12 +1,11 @@
 # =============================================================================
-# DRAFT QTZ-948 / Onda A — Quartzo-AI/affine-cli
+# QTZ-948 / Onda A — Quartzo-AI/affine-cli
 # Origem: .depot/workflows/affine-cli-pr-gates.yml @ main (cf39d38cbde1)
 # Estilo de referência: piloto quartzo-cli (.woodpecker/pr-gates.yaml)
 #
-# Destino no PR real: dividir em .woodpecker/build-and-test.yaml e
-# .woodpecker/lint.yaml (layout canônico multi-workflow: o nome do ARQUIVO
-# define o nome do workflow e o contexto). Neste draft os dois workflows
-# vivem em documentos `---` do mesmo arquivo.
+# QTZ-2388: separado do antigo pr-gates.yaml multi-documento. O Woodpecker lê
+# só o primeiro documento `---` de um arquivo, então os workflows depois dele
+# nunca rodaram. Agora cada workflow é um arquivo: build-and-test.yaml, lint.yaml.
 #
 # Contextos esperados no GitHub:
 #   ci/woodpecker/pr/build-and-test   ci/woodpecker/pr/lint
@@ -49,34 +48,3 @@ steps:
     directory: library/affine
     commands:
       - go test ./...
-
----
-# -----------------------------------------------------------------------------
-# Workflow 2/2 — lint (library/affine)
-# Equivalente inline de golangci-lint-action@v9:
-#   version: v2.11.4  -> mesma release binária baixada pela action
-#   verify: false     -> a action pula a checagem de integridade; aqui o
-#                        install.sh já valida por construção da release
-#   working-directory -> campo directory: do step
-# Fog: confirmar que a descoberta de config (.golangci.*) dentro de
-# library/affine se comporta igual à action na primeira execução.
-# -----------------------------------------------------------------------------
-when:
-  - event: pull_request
-
-steps:
-  install-golangci-lint:
-    # Download da MESMA versão que a action pinava. URL do install.sh é a
-    # recomendada pelo upstream; pin por digest/tag entra depois.
-    # TODO(digest-pin)
-    image: golang:1.26.5-bookworm
-    commands:
-      - curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/bin v2.11.4
-
-  golangci-lint:
-    # Gate absoluto: zero findings tolerados (comentário original preservado
-    # no NOTES.md). Roda no módulo, como a action fazia.
-    image: golang:1.26.5-bookworm # TODO(digest-pin)
-    directory: library/affine
-    commands:
-      - /usr/local/bin/golangci-lint run
