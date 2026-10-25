@@ -428,6 +428,8 @@ func newCanvasCardCmd(flags *rootFlags) *cobra.Command {
 		RunE:  parentNoSubcommandRunE(flags),
 	}
 	cmd.AddCommand(newCanvasCardCreateCmd(flags))
+	cmd.AddCommand(newCanvasCardEditCmd(flags))
+	cmd.AddCommand(newCanvasCardUploadImageCmd(flags))
 	cmd.AddCommand(newCanvasCardSetImageCmd(flags))
 	cmd.AddCommand(newCanvasCardInspectCmd(flags))
 	return cmd

@@ -174,6 +174,10 @@ func validateTransformOperations(ops []TransformOperation) error {
 		case op.Kind == CardCreateKind:
 			// Per-operation invariants are checked as a group below, so block IDs
 			// duplicated across cards in the same plan are rejected too.
+		case op.Kind == "edit_card" || op.Kind == "upsert_frame" || op.Kind == "remove_connector":
+			if err := validateCanvasEditOperation(op); err != nil {
+				return err
+			}
 		case op.Kind == "set_metadata":
 			metadata, ok := transformAfterMetadata(op.After)
 			if !ok || len(metadata) != 1 {
@@ -285,9 +289,15 @@ func transformApplyScript(doc int, ops []TransformOperation) string {
 				}).join(",") + "]";
 			}
 			%s
+			%s
 			var applied = [];
 			for (var i = 0; i < ops.length; i++) {
 				var op = ops[i];
+				if (op.kind === "edit_card" || op.kind === "upsert_frame" || op.kind === "remove_connector") {
+					editCanvas(op);
+					applied.push(op.id);
+					continue;
+				}
 				if (op.kind === "create_card") {
 					createCard(op.id, op.after);
 					applied.push(op.id);
@@ -310,5 +320,5 @@ func transformApplyScript(doc int, ops []TransformOperation) string {
 			}
 			return JSON.stringify({applied_ids: applied});
 		})()
-	`, doc, rawOps, cardCreateScriptHelpers)
+	`, doc, rawOps, cardCreateScriptHelpers, canvasEditScriptHelpers)
 }
