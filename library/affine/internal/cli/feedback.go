@@ -67,7 +67,7 @@ func appendFeedback(entry FeedbackEntry) error {
 	if err != nil {
 		return fmt.Errorf("opening feedback ledger: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return json.NewEncoder(f).Encode(entry)
 }
 
@@ -87,7 +87,7 @@ func postFeedback(url string, entry FeedbackEntry) error {
 	if err != nil {
 		return fmt.Errorf("posting feedback: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("feedback endpoint returned %s", resp.Status)
 	}

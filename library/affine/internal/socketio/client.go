@@ -128,9 +128,9 @@ func Connect(baseURL, cookie, bearer string) (*Client, error) {
 // error packet as "missing 'data' field"), so name the likely cause.
 func connectFailure(err error, bearer string) error {
 	if bearer == "" || !authsession.IsJWT(bearer) {
-		return fmt.Errorf("socket.io handshake refused (%v): no JWT session; set AFFINE_EMAIL and AFFINE_PASSWORD (a ut_ token no longer authenticates on AFFiNE >= 0.27)", err)
+		return fmt.Errorf("socket.io handshake refused (%w): no JWT session; set AFFINE_EMAIL and AFFINE_PASSWORD (a ut_ token no longer authenticates on AFFiNE >= 0.27)", err)
 	}
-	return fmt.Errorf("socket.io handshake refused (%v): the JWT session was not accepted; run `affine doctor`", err)
+	return fmt.Errorf("socket.io handshake refused (%w): the JWT session was not accepted; run `affine doctor`", err)
 }
 
 // Close disconnects the socket.

@@ -21,9 +21,10 @@ type DeliverSink struct {
 }
 
 // ParseDeliverSink parses a --deliver value. Supported schemes:
-//   stdout          -> default, no redirection
-//   file:<path>     -> write output atomically to <path>
-//   webhook:<url>   -> POST output body to <url>
+//
+//	stdout          -> default, no redirection
+//	file:<path>     -> write output atomically to <path>
+//	webhook:<url>   -> POST output body to <url>
 //
 // Returns an error for unknown schemes with a message naming the
 // supported set, so agents see a structured refusal rather than a
@@ -105,7 +106,7 @@ func deliverWebhook(url string, body []byte, compact bool) error {
 	if err != nil {
 		return fmt.Errorf("posting to webhook: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("webhook returned %s", resp.Status)
 	}

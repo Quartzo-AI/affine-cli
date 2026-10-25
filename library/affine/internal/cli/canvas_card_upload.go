@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/spf13/cobra"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -14,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 func newCanvasCardUploadImageCmd(flags *rootFlags) *cobra.Command {
@@ -91,7 +92,7 @@ func uploadCanvasImage(cfg *config.Config, workspace, name, mime string, data []
 	if err != nil {
 		return "", fmt.Errorf("image upload transport failed")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("image upload HTTP %d", resp.StatusCode)
 	}

@@ -86,7 +86,7 @@ func ProbeReachable(ctx context.Context, client *http.Client, url string) (statu
 	if doErr != nil {
 		return ReachabilityUnreachable, 0, doErr
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// Drain up to 2 KiB so the connection can be reused. We read past
 	// the 1024-byte Range hint to cover hosts that ignored it.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))

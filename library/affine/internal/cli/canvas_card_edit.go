@@ -5,8 +5,9 @@ import (
 	"affine-pp-cli/internal/config"
 	"encoding/json"
 	"fmt"
-	"github.com/spf13/cobra"
 	"os"
+
+	"github.com/spf13/cobra"
 )
 
 func newCanvasCardEditCmd(flags *rootFlags) *cobra.Command {

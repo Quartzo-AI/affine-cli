@@ -22,13 +22,13 @@ func TestUploadCanvasImageUsesMultipartGraphQL(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		} else {
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			if h.Header.Get("Content-Type") != "image/png" {
 				t.Error("wrong mime")
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"data":{"setBlob":"blob-id"}}`))
+		_, _ = w.Write([]byte(`{"data":{"setBlob":"blob-id"}}`))
 	}))
 	defer s.Close()
 	id, err := uploadCanvasImage(&config.Config{BaseURL: s.URL, AffineToken: "test"}, "workspace", "image.png", "image/png", []byte("image"))

@@ -581,7 +581,7 @@ func (c *Client) doInternal(ctx context.Context, method, path string, params map
 		}
 
 		respBody, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			return nil, 0, fmt.Errorf("reading response: %w", err)
 		}

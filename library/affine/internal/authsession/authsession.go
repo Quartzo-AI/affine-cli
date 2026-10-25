@@ -240,7 +240,7 @@ func post(ctx context.Context, o Options, step, path, version string, body any, 
 	if err != nil {
 		return fmt.Errorf("AFFiNE %s: %w", step, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode/100 != 2 {
 		return &AuthError{Step: step, Status: resp.StatusCode, Detail: errorDetail(data)}
@@ -284,7 +284,7 @@ func serverVersion(ctx context.Context, o Options) string {
 	if err != nil {
 		return DefaultClientVersion
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var info struct {
 		Compatibility string `json:"compatibility"`
 	}
@@ -338,11 +338,11 @@ func lock(cachePath string) (func(), error) {
 	for {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
-			f.Close()
-			return func() { os.Remove(path) }, nil
+			_ = f.Close()
+			return func() { _ = os.Remove(path) }, nil
 		}
 		if st, serr := os.Stat(path); serr == nil && time.Since(st.ModTime()) > lockStale {
-			os.Remove(path)
+			_ = os.Remove(path)
 			continue
 		}
 		if time.Now().After(deadline) {
