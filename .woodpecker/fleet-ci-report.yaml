@@ -2,7 +2,7 @@
 # Fleet CI — auto-report (opção C)
 # Reporta ESTE repo ao ledger `Fleet CI` da frota Quartzo:
 #   table 67d5d52c-9cd3-4092-9257-aa1f8f63e902 · sheets `Checks` e `Repos`
-#   contrato: 01-projects/quartzo/docs/artifacts/fleet-ci/contrato-colunas.md
+#   contrato: quark:.skills/quartzo/infra/quartzo-ci/references/fleet-ci-colunas.md
 #
 # Roda SÓ em push na branch default. Nunca em pull_request: o secret de org
 # `QUARTZO_API_KEY` não tem o evento pull_request, e um fork não pode forjar
