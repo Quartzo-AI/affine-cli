@@ -2,14 +2,14 @@
 # Fleet CI — auto-report (opção C)
 # Reporta ESTE repo ao ledger `Fleet CI` da frota Quartzo:
 #   table 67d5d52c-9cd3-4092-9257-aa1f8f63e902 · sheets `Checks` e `Repos`
-#   contrato: quark:.skills/quartzo/infra/quartzo-ci/references/fleet-ci-colunas.md
+#   contrato: quark:.skills/platform/fleet/references/ci/fleet-ci-colunas.md
 #
 # Roda SÓ em push na branch default. Nunca em pull_request: o secret de org
 # `QUARTZO_API_KEY` não tem o evento pull_request, e um fork não pode forjar
 # uma linha do ledger.
 #
 # A lógica de parse/fingerprint é cópia literal de
-# .skills/quartzo/infra/quartzo-ci/scripts/ci_ledger.py (parse_yaml_facts,
+# .skills/platform/fleet/scripts/ci/ci_ledger.py (parse_yaml_facts,
 # norm, upsert), para que reporter e reconciliador produzam a MESMA linha.
 #
 # O repo deliberadamente NÃO escreve:
